@@ -10,9 +10,11 @@ from simulator.database import (
     delete_cash_movement,
     delete_transaction,
     get_asset_by_isin,
+    get_setting,
     list_assets,
     list_cash_movements,
     list_transactions,
+    set_setting,
     update_asset,
     update_transaction,
 )
@@ -154,3 +156,16 @@ def test_cash_movement_amount_must_be_positive(conn):
 
     with pytest.raises(sqlite3.IntegrityError):
         add_cash_movement(conn, movement)
+
+
+def test_missing_setting_returns_the_default(conn):
+    assert get_setting(conn, "ps_rate", "0.186") == "0.186"
+    assert get_setting(conn, "ps_rate") is None
+
+
+def test_setting_is_saved_and_can_be_overwritten(conn):
+    set_setting(conn, "ps_rate", "0.172")
+    assert get_setting(conn, "ps_rate", "0.186") == "0.172"
+
+    set_setting(conn, "ps_rate", "0.186")
+    assert get_setting(conn, "ps_rate") == "0.186"

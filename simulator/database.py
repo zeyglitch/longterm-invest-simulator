@@ -202,3 +202,19 @@ def delete_cash_movement(conn: sqlite3.Connection, movement_id: int) -> None:
 def list_cash_movements(conn: sqlite3.Connection) -> list[CashMovement]:
     rows = conn.execute("SELECT * FROM cash_movements ORDER BY date, id").fetchall()
     return [_row_to_cash_movement(row) for row in rows]
+
+
+def get_setting(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
+    """Return the stored text for `key`, or `default` if it was never set."""
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Store `value` as text, replacing any previous value for `key`."""
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, str(value)),
+    )
+    conn.commit()
