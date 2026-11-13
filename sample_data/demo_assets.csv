@@ -1,0 +1,4 @@
+isin,name,ticker,fees,target_weight
+DEMO00000001,Demo World ETF,DEMOW.PA,0.002,0.75
+DEMO00000002,Demo Europe ETF,DEMOE.PA,0.0015,0.15
+DEMO00000003,Demo Emerging ETF,DEMOM.PA,0.003,0.1
