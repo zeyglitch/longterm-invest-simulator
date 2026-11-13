@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+from simulator.models import Asset
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assets (
     id            INTEGER PRIMARY KEY,
@@ -66,3 +68,43 @@ def init_db(conn: sqlite3.Connection) -> None:
     """Create the tables that do not exist yet. Safe to call at every start."""
     conn.executescript(SCHEMA)
     conn.commit()
+
+
+def _row_to_asset(row: sqlite3.Row) -> Asset:
+    return Asset(
+        id=row["id"],
+        isin=row["isin"],
+        name=row["name"],
+        ticker=row["ticker"],
+        fees=row["fees"],
+        target_weight=row["target_weight"],
+    )
+
+
+def add_asset(conn: sqlite3.Connection, asset: Asset) -> int:
+    """Insert an asset and return its new id. Raises sqlite3.IntegrityError if the ISIN exists."""
+    cursor = conn.execute(
+        "INSERT INTO assets (isin, name, ticker, fees, target_weight) VALUES (?, ?, ?, ?, ?)",
+        (asset.isin, asset.name, asset.ticker, asset.fees, asset.target_weight),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def update_asset(conn: sqlite3.Connection, asset: Asset) -> None:
+    conn.execute(
+        "UPDATE assets SET isin = ?, name = ?, ticker = ?, fees = ?, target_weight = ? "
+        "WHERE id = ?",
+        (asset.isin, asset.name, asset.ticker, asset.fees, asset.target_weight, asset.id),
+    )
+    conn.commit()
+
+
+def list_assets(conn: sqlite3.Connection) -> list[Asset]:
+    rows = conn.execute("SELECT * FROM assets ORDER BY name").fetchall()
+    return [_row_to_asset(row) for row in rows]
+
+
+def get_asset_by_isin(conn: sqlite3.Connection, isin: str) -> Asset | None:
+    row = conn.execute("SELECT * FROM assets WHERE isin = ?", (isin,)).fetchone()
+    return _row_to_asset(row) if row else None
