@@ -1,0 +1,21 @@
+# local notes and planning (not part of the project)
+.instructions/
+CLAUDE.md
+
+# personal data (real portfolio, exports from the broker)
+data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# streamlit
+.streamlit/secrets.toml
+
+# editors
+.vscode/
+.idea/
