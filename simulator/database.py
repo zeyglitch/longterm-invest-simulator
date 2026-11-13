@@ -1,7 +1,8 @@
 import sqlite3
+from datetime import date
 from pathlib import Path
 
-from simulator.models import Asset
+from simulator.models import Asset, CashMovement, Transaction
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assets (
@@ -108,3 +109,96 @@ def list_assets(conn: sqlite3.Connection) -> list[Asset]:
 def get_asset_by_isin(conn: sqlite3.Connection, isin: str) -> Asset | None:
     row = conn.execute("SELECT * FROM assets WHERE isin = ?", (isin,)).fetchone()
     return _row_to_asset(row) if row else None
+
+
+def _row_to_transaction(row: sqlite3.Row) -> Transaction:
+    return Transaction(
+        id=row["id"],
+        date=date.fromisoformat(row["date"]),
+        asset_id=row["asset_id"],
+        kind=row["kind"],
+        quantity=row["quantity"],
+        unit_price=row["unit_price"],
+        fees=row["fees"],
+        note=row["note"] or "",
+        source=row["source"],
+    )
+
+
+def add_transaction(conn: sqlite3.Connection, tx: Transaction) -> int:
+    """Insert a transaction and return its id. A quantity or price <= 0 is refused by the table."""
+    cursor = conn.execute(
+        "INSERT INTO transactions (date, asset_id, kind, quantity, unit_price, fees, note, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            tx.date.isoformat(),
+            tx.asset_id,
+            tx.kind,
+            tx.quantity,
+            tx.unit_price,
+            tx.fees,
+            tx.note,
+            tx.source,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def update_transaction(conn: sqlite3.Connection, tx: Transaction) -> None:
+    conn.execute(
+        "UPDATE transactions SET date = ?, asset_id = ?, kind = ?, quantity = ?, "
+        "unit_price = ?, fees = ?, note = ?, source = ? WHERE id = ?",
+        (
+            tx.date.isoformat(),
+            tx.asset_id,
+            tx.kind,
+            tx.quantity,
+            tx.unit_price,
+            tx.fees,
+            tx.note,
+            tx.source,
+            tx.id,
+        ),
+    )
+    conn.commit()
+
+
+def delete_transaction(conn: sqlite3.Connection, transaction_id: int) -> None:
+    conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
+    conn.commit()
+
+
+def list_transactions(conn: sqlite3.Connection) -> list[Transaction]:
+    """All transactions in chronological order (same day: order of entry)."""
+    rows = conn.execute("SELECT * FROM transactions ORDER BY date, id").fetchall()
+    return [_row_to_transaction(row) for row in rows]
+
+
+def _row_to_cash_movement(row: sqlite3.Row) -> CashMovement:
+    return CashMovement(
+        id=row["id"],
+        date=date.fromisoformat(row["date"]),
+        kind=row["kind"],
+        amount=row["amount"],
+        note=row["note"] or "",
+    )
+
+
+def add_cash_movement(conn: sqlite3.Connection, movement: CashMovement) -> int:
+    cursor = conn.execute(
+        "INSERT INTO cash_movements (date, kind, amount, note) VALUES (?, ?, ?, ?)",
+        (movement.date.isoformat(), movement.kind, movement.amount, movement.note),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def delete_cash_movement(conn: sqlite3.Connection, movement_id: int) -> None:
+    conn.execute("DELETE FROM cash_movements WHERE id = ?", (movement_id,))
+    conn.commit()
+
+
+def list_cash_movements(conn: sqlite3.Connection) -> list[CashMovement]:
+    rows = conn.execute("SELECT * FROM cash_movements ORDER BY date, id").fetchall()
+    return [_row_to_cash_movement(row) for row in rows]
