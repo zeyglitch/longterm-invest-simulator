@@ -4,11 +4,15 @@ import pytest
 
 from simulator.models import Asset, CashMovement, Transaction
 from simulator.portfolio import (
+    asset_errors,
     compute_positions,
+    first_oversold_sale,
     gross_deposits,
     quantity_held,
     realised_gains,
+    target_weights_total,
     total_deposits,
+    trade_errors,
 )
 
 ASSET_A = Asset(id=1, isin="XX0000000001", name="Asset A", ticker=None)
@@ -178,3 +182,95 @@ def test_gross_deposits_ignores_withdrawals():
 def test_deposit_totals_are_zero_without_movements():
     assert total_deposits([]) == 0
     assert gross_deposits([]) == 0
+
+
+def test_valid_asset_has_no_error():
+    asset = Asset(None, "XX0000000001", "Asset A", "A.PA", fees=0.002, target_weight=0.75)
+
+    assert asset_errors(asset) == []
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"name": "  "},
+        {"isin": "XX00001"},
+        {"isin": "XX00000000-1"},
+        {"fees": 0.2},  # 0.2 means 20 %: the user typed a percentage as a decimal
+        {"fees": -0.001},
+        {"target_weight": 0},
+        {"target_weight": 1.5},
+    ],
+)
+def test_invalid_asset_gives_one_error(changes):
+    values = dict(id=None, isin="XX0000000001", name="Asset A", ticker=None, fees=0.002)
+    values.update(changes)
+
+    assert len(asset_errors(Asset(**values))) == 1
+
+
+def test_target_weights_total_ignores_assets_without_target():
+    assets = [
+        Asset(1, "XX0000000001", "A", None, target_weight=0.75),
+        Asset(2, "XX0000000002", "B", None, target_weight=0.25),
+        Asset(3, "XX0000000003", "C", None),
+    ]
+
+    assert target_weights_total(assets) == pytest.approx(1.0)
+    assert target_weights_total(assets[2:]) is None
+
+
+TODAY = date(2026, 2, 1)
+
+
+def test_valid_buy_has_no_error():
+    assert trade_errors(trade(5, 1, "BUY", 2.5, 40.0), [], TODAY) == []
+
+
+@pytest.mark.parametrize(
+    "new_trade",
+    [
+        trade(5, 1, "BUY", 0, 40.0),
+        trade(5, 1, "BUY", 2, 0),
+        trade(5, 1, "BUY", 2, 40.0, fees=-1.0),
+        Transaction(None, date(2026, 2, 2), 1, "BUY", 2, 40.0),  # the day after TODAY
+    ],
+)
+def test_invalid_trade_fields_give_one_error(new_trade):
+    assert len(trade_errors(new_trade, [], TODAY)) == 1
+
+
+def test_sale_above_quantity_held_on_that_date_is_refused():
+    # P1: 10 shares on the 5th, 20 more on the 12th
+    assert trade_errors(trade(8, 1, "SELL", 10, 7.0), P1_TRADES, TODAY) == []
+    assert len(trade_errors(trade(8, 1, "SELL", 11, 7.0), P1_TRADES, TODAY)) == 1
+    assert len(trade_errors(trade(20, 1, "SELL", 31, 7.0), P1_TRADES, TODAY)) == 1
+    assert len(trade_errors(trade(20, 2, "SELL", 1, 7.0), P1_TRADES, TODAY)) == 1
+
+
+def test_selling_the_rest_of_fractional_shares_is_accepted():
+    # held is 0.3 - 0.1 = 0.19999999999999998, slightly under the 0.2 sold
+    saved = [trade(5, 1, "BUY", 0.3, 10.0, tx_id=1), trade(6, 1, "SELL", 0.1, 10.0, tx_id=2)]
+
+    assert trade_errors(trade(7, 1, "SELL", 0.2, 10.0), saved, TODAY) == []
+
+
+def test_new_sale_on_the_day_of_a_buy_comes_after_it():
+    saved = [trade(5, 1, "BUY", 10, 5.0, tx_id=1)]
+
+    assert trade_errors(trade(5, 1, "SELL", 10, 6.0), saved, TODAY) == []
+
+
+def test_earlier_sale_that_empties_a_later_sale_is_refused():
+    # P3 sells 10 on the 19th out of 30 held: selling 25 on the 15th leaves only 5 for it
+    errors = trade_errors(trade(15, 1, "SELL", 25, 7.0), P3_TRADES, TODAY)
+
+    assert len(errors) == 1
+    assert "19/01/2026" in errors[0]
+
+
+def test_removing_a_buy_needed_by_a_sale_is_detected():
+    # P3 without its second buy: 10 held, and the sale of 10 on the 19th is still fine
+    assert first_oversold_sale([P3_TRADES[0], P3_TRADES[2]]) is None
+    # without its first buy, 20 held: fine too ; without both, the sale has nothing to sell
+    assert first_oversold_sale([P3_TRADES[2]]) is P3_TRADES[2]

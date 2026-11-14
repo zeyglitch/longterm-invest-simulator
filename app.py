@@ -1,6 +1,42 @@
+import os
+
 import streamlit as st
 
+from simulator import config
+from simulator.database import get_connection, init_db, list_transactions
+from simulator.demo import build_demo_db
+from views.common import show_demo_banner
+
 st.set_page_config(layout="wide", page_title="Long-term Invest Simulator")
+
+# the online demo sets LTIS_DEMO=1: it never opens the real database
+DEMO_ONLY = os.environ.get("LTIS_DEMO") == "1"
+
+
+def choose_database() -> None:
+    """Put the demo or the real connection in session_state["conn"], from the sidebar switch."""
+    if "demo_conn" not in st.session_state:
+        st.session_state["demo_conn"] = build_demo_db()
+    if DEMO_ONLY:
+        st.session_state["demo"] = True
+        st.session_state["conn"] = st.session_state["demo_conn"]
+        return
+
+    if "real_conn" not in st.session_state:
+        real_conn = get_connection(config.DB_PATH)
+        init_db(real_conn)
+        st.session_state["real_conn"] = real_conn
+        # demo by default until the first real trade is entered
+        st.session_state["demo_switch"] = len(list_transactions(real_conn)) == 0
+
+    demo = st.sidebar.toggle(
+        "Demo data",
+        key="demo_switch",
+        help="Fictional portfolio, kept in memory only. Switch off to use your own data.",
+    )
+    st.session_state["demo"] = demo
+    st.session_state["conn"] = st.session_state["demo_conn" if demo else "real_conn"]
+
 
 pages = {
     "Tracking": [
@@ -15,12 +51,15 @@ pages = {
         st.Page("views/backtest.py", title="Backtest"),
         st.Page("views/withdrawal.py", title="Withdrawal"),
     ],
-    "": [st.Page("views/settings.py", title="Settings")],
+    "Configuration": [st.Page("views/settings.py", title="Settings")],
 }
 
 page = st.navigation(pages)
+choose_database()
 
 with st.sidebar:
+    st.caption("Demo data" if st.session_state["demo"] else "My portfolio")
     st.caption("Educational tool. Not financial advice.")
 
+show_demo_banner()
 page.run()

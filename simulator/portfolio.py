@@ -11,8 +11,13 @@ CLOSED_QUANTITY = 1e-9
 
 
 def _in_processing_order(transactions: list[Transaction]) -> list[Transaction]:
-    """Trades sorted by date, then by id (entry order) on the same day."""
-    return sorted(transactions, key=lambda tx: (tx.date, tx.id or 0))
+    """Trades sorted by date, then by id (entry order) on the same day.
+
+    A trade not saved yet has no id: it comes last on its day, as it will once saved.
+    """
+    return sorted(
+        transactions, key=lambda tx: (tx.date, tx.id if tx.id is not None else float("inf"))
+    )
 
 
 def _replay(transactions: list[Transaction], include_fees: bool) -> tuple[dict[int, dict], list]:
@@ -127,3 +132,63 @@ def total_deposits(cash_movements: list[CashMovement]) -> float:
 def gross_deposits(cash_movements: list[CashMovement]) -> float:
     """Sum of deposits only, for the PEA ceiling: a withdrawal gives no capacity back."""
     return sum(m.amount for m in cash_movements if m.kind == "DEPOSIT")
+
+
+def first_oversold_sale(transactions: list[Transaction]) -> Transaction | None:
+    """The first sale that sells more shares than held at that moment, or None if all are fine."""
+    held: dict[int, float] = {}
+    for tx in _in_processing_order(transactions):
+        change = tx.quantity if tx.kind == "BUY" else -tx.quantity
+        held[tx.asset_id] = held.get(tx.asset_id, 0.0) + change
+        # the tolerance accepts 0.3 - 0.1 - 0.2, which is not exactly 0 in floating point
+        if held[tx.asset_id] < -CLOSED_QUANTITY:
+            return tx
+    return None
+
+
+def trade_errors(tx: Transaction, other_transactions: list[Transaction], today: date) -> list[str]:
+    """Messages for what is wrong in a trade typed by the user (empty list if it is valid).
+
+    `other_transactions` are the saved trades, without the one being edited.
+    """
+    errors = []
+    if tx.quantity <= 0:
+        errors.append("The quantity must be greater than 0.")
+    if tx.unit_price <= 0:
+        errors.append("The unit price must be greater than 0.")
+    if tx.fees < 0:
+        errors.append("Fees cannot be negative.")
+    if tx.date > today:
+        errors.append("The date cannot be in the future.")
+    if errors:
+        return errors
+
+    oversold = first_oversold_sale(other_transactions + [tx])
+    if oversold is tx:
+        errors.append("You cannot sell more shares than you hold on that date.")
+    elif oversold is not None:
+        errors.append(
+            f"With this trade, the sale of {oversold.date:%d/%m/%Y} would sell more shares "
+            "than held on that date."
+        )
+    return errors
+
+
+def asset_errors(asset: Asset) -> list[str]:
+    """Messages for what is wrong in an asset typed by the user (empty list if it is valid)."""
+    errors = []
+    if not asset.name.strip():
+        errors.append("The name is required.")
+    if len(asset.isin) != 12 or not asset.isin.isalnum():
+        errors.append("An ISIN has 12 letters and digits, for example FR0000000000.")
+    if not 0 <= asset.fees < 0.05:
+        errors.append("Yearly fees must be between 0 % and 5 %.")
+    if asset.target_weight is not None and not 0 < asset.target_weight <= 1:
+        errors.append("The target weight must be between 0 % and 100 %, or left empty.")
+    return errors
+
+
+def target_weights_total(assets: list[Asset]) -> float | None:
+    """Sum of the target weights that are set, or None if no asset has one."""
+    weights = [asset.target_weight for asset in assets if asset.target_weight is not None]
+    return sum(weights) if weights else None
