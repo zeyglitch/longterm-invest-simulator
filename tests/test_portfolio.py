@@ -57,8 +57,9 @@ def test_fractional_buy():
 
 
 def test_asset_without_trades_has_no_position():
-    assert compute_positions([ASSET_A, ASSET_B], P1_TRADES, {})[0].asset == ASSET_A
-    assert len(compute_positions([ASSET_A, ASSET_B], P1_TRADES, {})) == 1
+    positions = compute_positions([ASSET_A, ASSET_B], P1_TRADES, {})
+
+    assert [position.asset for position in positions] == [ASSET_A]
 
 
 # P3: after P1, sell 10 shares at 7.00 (fee 1)

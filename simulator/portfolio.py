@@ -1,4 +1,4 @@
-"""Positions and average cost from the list of trades (rules in section 1 of the finance notes)."""
+"""Positions, average cost and realised gains, with the weighted average cost method."""
 
 from datetime import date
 
