@@ -32,3 +32,17 @@ class CashMovement:
     kind: str  # "DEPOSIT" or "WITHDRAWAL"
     amount: float
     note: str = ""
+
+
+@dataclass
+class Position:
+    asset: Asset
+    quantity: float
+    avg_cost: float
+    invested: float
+    last_price: float | None
+    price_date: date | None
+    value: float | None
+    gain: float | None
+    gain_pct: float | None  # decimal: 0.1337 for 13.37%
+    weight: float | None  # share of the total value of priced positions
