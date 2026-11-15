@@ -13,10 +13,12 @@ from simulator.database import (
     get_connection,
     init_db,
     save_prices,
+    set_setting,
 )
 from simulator.models import Asset, CashMovement, Transaction
 
 SAMPLE_DIR = config.ROOT_DIR / "sample_data"
+DEMO_PEA_OPEN_DATE = "2024-11-04"
 
 
 def _read_rows(filename: str) -> list[dict]:
@@ -64,6 +66,8 @@ def build_demo_db(path: str = ":memory:") -> sqlite3.Connection:
         add_cash_movement(conn, movement)
 
     _load_frozen_prices(conn)
+    # fictional opening date, a bit before the first fictional trade
+    set_setting(conn, "pea_open_date", DEMO_PEA_OPEN_DATE)
     return conn
 
 

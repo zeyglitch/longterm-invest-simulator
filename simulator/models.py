@@ -46,3 +46,11 @@ class Position:
     gain: float | None
     gain_pct: float | None  # decimal: 0.1337 for 13.37%
     weight: float | None  # share of the total value of priced positions
+
+
+@dataclass
+class TaxSettings:
+    ps_rate: float  # social charges, decimal: 0.186 for 18.6%
+    ir_rate: float  # income tax part of the flat tax (PFU)
+    pea_ceiling: float  # maximum total of deposits on the PEA, in euros
+    pea_open_date: date | None  # needed to know when the 5 years are over

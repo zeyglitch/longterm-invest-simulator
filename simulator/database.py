@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from simulator.models import Asset, CashMovement, Transaction
+from simulator import config
+from simulator.models import Asset, CashMovement, TaxSettings, Transaction
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assets (
@@ -212,6 +213,17 @@ def list_cash_movements(conn: sqlite3.Connection) -> list[CashMovement]:
     return [_row_to_cash_movement(row) for row in rows]
 
 
+def reset_database(conn: sqlite3.Connection) -> None:
+    """Delete everything the user entered: assets, trades, deposits, prices, settings, plans.
+
+    The tables themselves stay, so the app keeps working on the empty database.
+    """
+    # children first: the foreign keys forbid deleting an asset that still has trades or prices
+    for table in ("transactions", "prices", "cash_movements", "plans", "settings", "assets"):
+        conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+
+
 def get_setting(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
     """Return the stored text for `key`, or `default` if it was never set."""
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -226,6 +238,46 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
         (key, str(value)),
     )
     conn.commit()
+
+
+def get_float_setting(conn: sqlite3.Connection, key: str, default: float) -> float:
+    """A stored number, or `default` if it was never set (or is not a number)."""
+    text = get_setting(conn, key)
+    try:
+        return float(text) if text is not None else float(default)
+    except ValueError:
+        return float(default)
+
+
+def load_tax_settings(conn: sqlite3.Connection) -> TaxSettings:
+    """The tax parameters of the account, with the defaults of config.py for those never set."""
+    open_text = get_setting(conn, "pea_open_date")
+    return TaxSettings(
+        ps_rate=get_float_setting(conn, "ps_rate", config.DEFAULT_PS_RATE),
+        ir_rate=get_float_setting(conn, "ir_rate", config.DEFAULT_IR_RATE),
+        pea_ceiling=get_float_setting(conn, "pea_ceiling", config.DEFAULT_PEA_CEILING),
+        pea_open_date=date.fromisoformat(open_text) if open_text else None,
+    )
+
+
+def save_tax_settings(conn: sqlite3.Connection, settings: TaxSettings) -> None:
+    set_setting(conn, "ps_rate", str(settings.ps_rate))
+    set_setting(conn, "ir_rate", str(settings.ir_rate))
+    set_setting(conn, "pea_ceiling", str(settings.pea_ceiling))
+    if settings.pea_open_date is None:
+        conn.execute("DELETE FROM settings WHERE key = 'pea_open_date'")
+        conn.commit()
+    else:
+        set_setting(conn, "pea_open_date", settings.pea_open_date.isoformat())
+
+
+def get_include_fees(conn: sqlite3.Connection) -> bool:
+    """Whether order fees count in the cost of shares (default: yes, as the broker shows it)."""
+    return get_setting(conn, "cost_includes_fees", "1") == "1"
+
+
+def set_include_fees(conn: sqlite3.Connection, include_fees: bool) -> None:
+    set_setting(conn, "cost_includes_fees", "1" if include_fees else "0")
 
 
 def save_prices(conn: sqlite3.Connection, asset_id: int, prices: pd.Series, source: str) -> None:

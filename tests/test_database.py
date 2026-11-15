@@ -12,6 +12,8 @@ from simulator.database import (
     delete_manual_price,
     delete_transaction,
     get_asset_by_isin,
+    get_float_setting,
+    get_include_fees,
     get_last_price,
     get_last_yahoo_date,
     get_price_history,
@@ -21,12 +23,16 @@ from simulator.database import (
     list_cash_movements,
     list_manual_prices,
     list_transactions,
+    load_tax_settings,
+    reset_database,
     save_prices,
+    save_tax_settings,
+    set_include_fees,
     set_setting,
     update_asset,
     update_transaction,
 )
-from simulator.models import Asset, CashMovement, Transaction
+from simulator.models import Asset, CashMovement, TaxSettings, Transaction
 
 
 def make_asset(isin="FR0000000001", name="Test ETF World") -> Asset:
@@ -280,3 +286,71 @@ def test_editing_an_asset_without_changing_its_ticker_keeps_its_prices(conn):
     update_asset(conn, asset)
 
     assert get_last_yahoo_date(conn, asset.id) == date(2026, 3, 2)
+
+
+def test_tax_settings_start_with_the_defaults(conn):
+    settings = load_tax_settings(conn)
+
+    assert settings == TaxSettings(0.186, 0.128, 150_000, None)
+
+
+def test_tax_settings_can_be_saved_and_read_back(conn):
+    saved = TaxSettings(0.172, 0.128, 20_000, date(2025, 10, 7))
+
+    save_tax_settings(conn, saved)
+
+    assert load_tax_settings(conn) == saved
+
+
+def test_the_opening_date_can_be_cleared(conn):
+    save_tax_settings(conn, TaxSettings(0.186, 0.128, 150_000, date(2025, 10, 7)))
+
+    save_tax_settings(conn, TaxSettings(0.186, 0.128, 150_000, None))
+
+    assert load_tax_settings(conn).pea_open_date is None
+
+
+def test_a_setting_that_is_not_a_number_falls_back_on_the_default(conn):
+    set_setting(conn, "livret_rate", "abc")
+
+    assert get_float_setting(conn, "livret_rate", 0.017) == 0.017
+    assert get_float_setting(conn, "never_set", 5.0) == 5.0
+
+
+def test_fees_count_in_the_cost_unless_told_otherwise(conn):
+    assert get_include_fees(conn) is True
+
+    set_include_fees(conn, False)
+
+    assert get_include_fees(conn) is False
+
+
+def test_a_number_setting_is_always_a_float(conn):
+    # config.py holds some defaults as whole numbers, and Streamlit refuses to mix the two types
+    assert isinstance(get_float_setting(conn, "livret_ceiling", 22_950), float)
+    assert isinstance(load_tax_settings(conn).pea_ceiling, float)
+
+
+def test_reset_deletes_everything_the_user_entered(conn):
+    asset_id = add_asset(conn, make_asset())
+    add_transaction(conn, Transaction(None, date(2026, 3, 2), asset_id, "BUY", 1, 10.0))
+    add_cash_movement(conn, CashMovement(None, date(2026, 3, 2), "DEPOSIT", 10.0))
+    save_prices(conn, asset_id, make_series({"2026-03-02": 10.0}), "manual")
+    set_setting(conn, "ps_rate", "0.172")
+
+    reset_database(conn)
+
+    assert list_assets(conn) == []
+    assert list_transactions(conn) == []
+    assert list_cash_movements(conn) == []
+    assert list_manual_prices(conn) == []
+    assert get_setting(conn, "ps_rate") is None
+
+
+def test_the_database_is_usable_again_after_a_reset(conn):
+    add_asset(conn, make_asset())
+    reset_database(conn)
+
+    asset_id = add_asset(conn, make_asset())  # the same ISIN is free again
+
+    assert [asset.id for asset in list_assets(conn)] == [asset_id]

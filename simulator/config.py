@@ -1,9 +1,11 @@
 """Default values and paths. Rates are decimals: 0.06 for 6%."""
 
+import os
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT_DIR / "data" / "portfolio.db"
+# LTIS_DB points to another file, to try the app on a copy without touching the real data
+DB_PATH = Path(os.environ.get("LTIS_DB") or ROOT_DIR / "data" / "portfolio.db")
 
 DEFAULT_PS_RATE = 0.186
 DEFAULT_IR_RATE = 0.128
@@ -17,3 +19,6 @@ DEFAULT_VOLATILITY = 0.15
 DEFAULT_N_PATHS = 5_000
 DEFAULT_SEED = 42
 DEFAULT_BENCHMARK = "CW8.PA"
+
+# the default rates above were last checked on this date
+RATES_VERIFIED_ON = "13/11/2026"

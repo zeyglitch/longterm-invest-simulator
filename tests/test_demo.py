@@ -6,6 +6,7 @@ from simulator.database import (
     list_assets,
     list_cash_movements,
     list_transactions,
+    load_tax_settings,
 )
 from simulator.demo import SAMPLE_DIR, build_demo_db
 
@@ -46,3 +47,9 @@ def test_demo_prices_on_trade_days_match_the_trade_prices():
 
     for tx in list_transactions(conn):
         assert get_last_price(conn, tx.asset_id, tx.date) == (tx.date, tx.unit_price)
+
+
+def test_demo_has_a_fictional_pea_opening_date():
+    conn = build_demo_db()
+
+    assert load_tax_settings(conn).pea_open_date == date(2024, 11, 4)

@@ -8,6 +8,8 @@ from simulator.models import Asset, CashMovement, Position, Transaction
 
 # below this, a quantity is a rounding residue of fractional shares: the position is closed
 CLOSED_QUANTITY = 1e-9
+# a price older than this many days is shown as out of date
+STALE_PRICE_DAYS = 4
 
 
 def _in_processing_order(transactions: list[Transaction]) -> list[Transaction]:
@@ -179,6 +181,20 @@ def total_deposits(cash_movements: list[CashMovement]) -> float:
 def gross_deposits(cash_movements: list[CashMovement]) -> float:
     """Sum of deposits only, for the PEA ceiling: a withdrawal gives no capacity back."""
     return sum(m.amount for m in cash_movements if m.kind == "DEPOSIT")
+
+
+def pea_capacity(cash_movements: list[CashMovement], ceiling: float) -> float:
+    """Euros that can still be deposited under the ceiling; negative if it is exceeded."""
+    return ceiling - gross_deposits(cash_movements)
+
+
+def stale_prices(positions: list[Position], today: date) -> list[str]:
+    """Names of the open positions whose last price is older than STALE_PRICE_DAYS."""
+    return [
+        p.asset.name
+        for p in positions
+        if p.price_date is not None and (today - p.price_date).days > STALE_PRICE_DAYS
+    ]
 
 
 def first_oversold_sale(transactions: list[Transaction]) -> Transaction | None:

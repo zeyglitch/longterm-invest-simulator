@@ -45,6 +45,9 @@ def render_price_refresh() -> None:
     if st.sidebar.button("Refresh prices", icon=":material/refresh:", width="stretch"):
         with st.spinner("Downloading prices from Yahoo Finance..."):
             failures = refresh_prices(conn)
+        # one list per database, so a demo refresh never warns on the real portfolio
+        kind = "demo" if st.session_state["demo"] else "real"
+        st.session_state[f"price_failures_{kind}"] = failures
         if failures:
             st.sidebar.warning(
                 "No new price for: " + ", ".join(failures) + ". The last known prices are kept."

@@ -1,19 +1,30 @@
 import sqlite3
+import time
+from datetime import date
 
 import pandas as pd
 import streamlit as st
 
+from simulator import config
 from simulator.database import (
     add_asset,
     delete_manual_price,
+    get_float_setting,
+    get_include_fees,
     get_last_price,
     get_price_source,
     list_assets,
     list_manual_prices,
+    load_tax_settings,
+    reset_database,
     save_prices,
+    save_tax_settings,
+    set_include_fees,
+    set_setting,
     update_asset,
 )
-from simulator.models import Asset
+from simulator.importer import export_transactions
+from simulator.models import Asset, TaxSettings
 from simulator.portfolio import asset_errors, target_weights_total
 from simulator.prices import fetch_last_price, find_ticker
 from views.common import format_eur, format_pct, get_conn, set_flash, show_flash
@@ -263,3 +274,193 @@ if assets:
     with st.expander("Enter a manual price"):
         render_manual_price(assets)
         render_manual_price_list(assets)
+
+
+def percent_to_decimal(percent: float) -> float:
+    """A rate typed as a percentage becomes a decimal, without floating point residue."""
+    return round(percent / 100, 6)
+
+
+def render_account() -> None:
+    settings = load_tax_settings(get_conn())
+    with st.form("account", border=False):
+        left, right = st.columns(2)
+        open_date = left.date_input(
+            "PEA opening date",
+            value=settings.pea_open_date,
+            min_value=date(1992, 1, 1),
+            max_value="today",
+            format="DD/MM/YYYY",
+            help="The day the PEA was opened: after 5 years, gains only bear social charges.",
+        )
+        ceiling = right.number_input(
+            "PEA deposit ceiling (€)",
+            min_value=1.0,
+            value=float(settings.pea_ceiling),
+            step=1000.0,
+            format="%.0f",
+            help="150 000 € in general; 20 000 € for a young adult attached to their parents' "
+            "tax household.",
+        )
+        with_fees = st.checkbox(
+            "Include order fees in the cost of shares",
+            value=get_include_fees(get_conn()),
+            help="The broker shows an average cost with fees included.",
+        )
+        submitted = st.form_submit_button("Save account settings", type="primary")
+    if submitted:
+        new = TaxSettings(settings.ps_rate, settings.ir_rate, ceiling, open_date)
+        save_tax_settings(get_conn(), new)
+        set_include_fees(get_conn(), with_fees)
+        set_flash("Account settings saved.")
+        st.rerun()
+
+
+def render_tax_and_rates() -> None:
+    conn = get_conn()
+    settings = load_tax_settings(conn)
+    checked = f"Default {{default}}, checked on {config.RATES_VERIFIED_ON}. Check the current rate."
+    with st.form("tax_and_rates", border=False):
+        left, right = st.columns(2)
+        ps_pct = left.number_input(
+            "Social charges (%)",
+            min_value=0.0,
+            max_value=50.0,
+            value=settings.ps_rate * 100,
+            step=0.1,
+            format="%.2f",
+            help=checked.format(default=format_pct(config.DEFAULT_PS_RATE, 2)),
+        )
+        ir_pct = right.number_input(
+            "Income tax part of the flat tax (%)",
+            min_value=0.0,
+            max_value=50.0,
+            value=settings.ir_rate * 100,
+            step=0.1,
+            format="%.2f",
+            help=checked.format(default=format_pct(config.DEFAULT_IR_RATE, 2)),
+        )
+        livret_pct = left.number_input(
+            "Livret A rate (%)",
+            min_value=0.0,
+            max_value=20.0,
+            value=get_float_setting(conn, "livret_rate", config.DEFAULT_LIVRET_RATE) * 100,
+            step=0.05,
+            format="%.2f",
+            help=checked.format(default=format_pct(config.DEFAULT_LIVRET_RATE, 2)),
+        )
+        livret_ceiling = right.number_input(
+            "Livret A ceiling (€)",
+            min_value=1.0,
+            value=get_float_setting(conn, "livret_ceiling", config.DEFAULT_LIVRET_CEILING),
+            step=500.0,
+            format="%.0f",
+            help=checked.format(default=format_eur(config.DEFAULT_LIVRET_CEILING)),
+        )
+        inflation_pct = left.number_input(
+            "Default inflation (%)",
+            min_value=0.0,
+            max_value=20.0,
+            value=get_float_setting(conn, "inflation", config.DEFAULT_INFLATION) * 100,
+            step=0.1,
+            format="%.2f",
+            help="An assumption, not a measure: used by default in the simulations.",
+        )
+        submitted = st.form_submit_button("Save rates", type="primary")
+    st.caption(
+        "Rates change: check them on an official source (service-public.fr, "
+        "impots.gouv.fr, banque-france.fr) before relying on a simulation."
+    )
+    if submitted:
+        new = TaxSettings(
+            percent_to_decimal(ps_pct),
+            percent_to_decimal(ir_pct),
+            settings.pea_ceiling,
+            settings.pea_open_date,
+        )
+        save_tax_settings(conn, new)
+        set_setting(conn, "livret_rate", str(percent_to_decimal(livret_pct)))
+        set_setting(conn, "livret_ceiling", str(livret_ceiling))
+        set_setting(conn, "inflation", str(percent_to_decimal(inflation_pct)))
+        set_flash("Rates saved.")
+        st.rerun()
+
+
+st.subheader("Account")
+render_account()
+
+st.subheader("Tax and rates")
+render_tax_and_rates()
+
+
+RESET_DELAY_SECONDS = 5
+RESET_WORD = "ok"
+
+
+@st.dialog("Delete all my data")
+def reset_dialog() -> None:
+    """Ask to type `ok`, then make the user wait 5 seconds before the delete button works."""
+    st.warning(
+        "This deletes your assets, trades, deposits, prices, account settings and rates. "
+        "It cannot be undone.",
+        icon=":material/warning:",
+    )
+    st.download_button(
+        "Download a backup of my trades first (CSV)",
+        data=export_transactions(get_conn()),
+        file_name="transactions.csv",
+        mime="text/csv",
+        icon=":material/download:",
+    )
+    # one field per opening of the dialog: an `ok` typed in an earlier attempt never counts
+    answer = st.text_input(
+        f"Type {RESET_WORD} to confirm", key=f"reset_confirm_{st.session_state['reset_attempt']}"
+    )
+
+    typed = answer.strip().lower() == RESET_WORD
+    if not typed:
+        st.session_state.pop("reset_typed_at", None)  # the countdown restarts if `ok` is erased
+    elif "reset_typed_at" not in st.session_state:
+        st.session_state["reset_typed_at"] = time.monotonic()
+    seconds_left = 0.0
+    if typed:
+        seconds_left = RESET_DELAY_SECONDS - (time.monotonic() - st.session_state["reset_typed_at"])
+
+    if not typed:
+        st.caption(f"Type {RESET_WORD} above, then wait {RESET_DELAY_SECONDS} seconds.")
+    elif seconds_left > 0:
+        st.caption(f"You can confirm in {int(seconds_left) + 1} s.")
+    ready = typed and seconds_left <= 0
+    if st.button("Delete everything", type="primary", icon=":material/delete:", disabled=not ready):
+        reset_database(get_conn())
+        # the names of the assets the last refresh could not update are gone too
+        for key in ("reset_typed_at", "price_failures_real"):
+            st.session_state.pop(key, None)
+        set_flash("All your data has been deleted.")
+        st.rerun()  # the whole page, which also closes the dialog
+
+    if typed and seconds_left > 0:
+        # wait a second, then redraw the dialog only: the countdown goes down
+        time.sleep(1)
+        st.rerun(scope="fragment")
+
+
+def render_data() -> None:
+    if st.session_state["demo"]:
+        st.caption(
+            "The demo data is rebuilt each time the app starts. "
+            "Switch off Demo data in the sidebar to manage your own data."
+        )
+        return
+    st.caption(
+        "Start again from an empty portfolio, for example after trying the app with test numbers."
+    )
+    if st.button("Delete all my data", icon=":material/delete_forever:"):
+        # start from scratch each time: new empty field, countdown not started
+        st.session_state["reset_attempt"] = st.session_state.get("reset_attempt", 0) + 1
+        st.session_state.pop("reset_typed_at", None)
+        reset_dialog()
+
+
+st.subheader("Data")
+render_data()

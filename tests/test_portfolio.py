@@ -9,9 +9,11 @@ from simulator.portfolio import (
     compute_positions,
     first_oversold_sale,
     gross_deposits,
+    pea_capacity,
     portfolio_history,
     quantity_held,
     realised_gains,
+    stale_prices,
     target_weights_total,
     total_deposits,
     trade_errors,
@@ -348,3 +350,31 @@ def test_history_without_trade_is_empty():
 
     assert history.empty
     assert list(history.columns) == ["date", "value", "invested"]
+
+
+def test_pea_capacity_counts_deposits_only_not_withdrawals():
+    movements = [
+        CashMovement(None, date(2026, 1, 5), "DEPOSIT", 600.0),
+        CashMovement(None, date(2026, 2, 5), "DEPOSIT", 400.0),
+        CashMovement(None, date(2026, 3, 5), "WITHDRAWAL", 300.0),
+    ]
+
+    assert pea_capacity(movements, 20_000) == pytest.approx(19_000.0)
+    assert pea_capacity(movements, 800) == pytest.approx(-200.0)  # ceiling exceeded
+
+
+def test_stale_prices_names_the_positions_with_a_price_older_than_four_days():
+    prices = {1: (date(2026, 1, 10), 5.0), 2: (date(2026, 1, 12), 40.0)}
+    positions = compute_positions(
+        [ASSET_A, ASSET_B], [trade(5, 1, "BUY", 1, 5.0), trade(5, 2, "BUY", 1, 40.0)], prices
+    )
+
+    assert stale_prices(positions, date(2026, 1, 14)) == []  # 4 days old is still fine
+    assert stale_prices(positions, date(2026, 1, 15)) == ["Asset A"]
+    assert stale_prices(positions, date(2026, 1, 17)) == ["Asset A", "Asset B"]
+
+
+def test_a_position_without_price_is_not_called_stale():
+    positions = compute_positions([ASSET_A], [trade(5, 1, "BUY", 1, 5.0)], {})
+
+    assert stale_prices(positions, date(2026, 6, 1)) == []
