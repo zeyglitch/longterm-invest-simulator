@@ -22,6 +22,12 @@ def format_quantity(quantity: float) -> str:
     return f"{quantity:,.4f}".replace(",", " ").rstrip("0").rstrip(".")
 
 
+def asset_label(asset) -> str:
+    """Text of an asset in a dropdown. Streamlit finds the chosen option by its text, so two
+    assets must never share one: the ISIN, which is unique, is always part of it."""
+    return f"{asset.name} ({asset.isin})"
+
+
 def get_conn() -> sqlite3.Connection:
     """The database chosen in app.py: the demo one or the real one."""
     return st.session_state["conn"]

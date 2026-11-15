@@ -27,7 +27,7 @@ from simulator.importer import export_transactions
 from simulator.models import Asset, TaxSettings
 from simulator.portfolio import asset_errors, target_weights_total
 from simulator.prices import fetch_last_price, find_ticker
-from views.common import format_eur, format_pct, get_conn, set_flash, show_flash
+from views.common import asset_label, format_eur, format_pct, get_conn, set_flash, show_flash
 
 
 def asset_from_inputs(asset_id, name, isin, ticker, fees_pct, weight_pct) -> Asset:
@@ -78,7 +78,8 @@ def asset_inputs(asset: Asset | None, key: str):
 
 def save_asset(asset: Asset) -> list[str]:
     """Add or update the asset. Returns the error messages, empty if it was saved."""
-    errors = asset_errors(asset)
+    others = [other for other in list_assets(get_conn()) if other.id != asset.id]
+    errors = asset_errors(asset, others)
     if errors:
         return errors
     try:
@@ -110,9 +111,15 @@ def render_asset_list(assets: list[Asset]) -> None:
         st.warning(f"Target weights add up to {format_pct(total)} instead of 100 %.")
 
 
+def add_form_key() -> str:
+    """Key prefix of the add form. It changes after each asset added, which gives new, empty
+    fields: deleting the old values is not enough, the browser sends them back."""
+    return f"add_asset_{st.session_state.get('add_asset_count', 0)}"
+
+
 def use_ticker_result() -> None:
     """Called when `Use this ticker` is clicked: test the ticker, then fill the add form."""
-    result = st.session_state["lookup_choice"]
+    result = st.session_state[f"{add_form_key()}_lookup_choice"]
     price = fetch_last_price(result["ticker"])
     if price is None:
         st.session_state["lookup_message"] = (
@@ -122,10 +129,11 @@ def use_ticker_result() -> None:
         )
         return
     day, close = price
-    st.session_state["add_asset_isin"] = st.session_state["lookup_isin"].strip().upper()
-    st.session_state["add_asset_ticker"] = result["ticker"]
-    if not st.session_state["add_asset_name"]:
-        st.session_state["add_asset_name"] = result["name"]
+    key = add_form_key()
+    st.session_state[f"{key}_isin"] = st.session_state[f"{key}_lookup_isin"].strip().upper()
+    st.session_state[f"{key}_ticker"] = result["ticker"]
+    # always the name of the fund just found: a name left from another search would be wrong
+    st.session_state[f"{key}_name"] = result["name"]
     st.session_state["lookup_message"] = (
         "success",
         f"{result['ticker']} works: last price {format_eur(close)} on {day:%d/%m/%Y}. "
@@ -136,7 +144,9 @@ def use_ticker_result() -> None:
 def render_ticker_lookup() -> None:
     """Find the Yahoo ticker of an ISIN. Outside the form below: a form cannot hold a search."""
     left, right = st.columns([3, 1], vertical_alignment="bottom")
-    isin = left.text_input("Look up a ticker from an ISIN", key="lookup_isin", max_chars=12)
+    isin = left.text_input(
+        "Look up a ticker from an ISIN", key=f"{add_form_key()}_lookup_isin", max_chars=12
+    )
     if right.button("Search", icon=":material/search:", key="lookup_search") and isin.strip():
         results = find_ticker(isin.strip().upper())
         st.session_state["lookup_results"] = results
@@ -151,7 +161,7 @@ def render_ticker_lookup() -> None:
             "Matching listings",
             results,
             format_func=lambda r: f"{r['ticker']} — {r['name']} ({r['exchange']})",
-            key="lookup_choice",
+            key=f"{add_form_key()}_lookup_choice",
             help="Paris listings come first. Choose the one in euros that you trade.",
         )
         st.button("Use this ticker", on_click=use_ticker_result)
@@ -163,7 +173,7 @@ def render_ticker_lookup() -> None:
 
 def render_add_asset() -> None:
     with st.form("add_asset", border=False):
-        inputs = asset_inputs(None, key="add_asset")
+        inputs = asset_inputs(None, key=add_form_key())
         submitted = st.form_submit_button("Add asset", type="primary")
     if submitted:
         asset = asset_from_inputs(None, *inputs)
@@ -171,18 +181,17 @@ def render_add_asset() -> None:
         if errors:
             st.error("\n\n".join(errors))
         else:
-            # forget the typed values so the form comes back empty
-            for field in ("name", "isin", "ticker", "fees", "weight"):
-                del st.session_state[f"add_asset_{field}"]
+            # new empty fields for the next asset (see add_form_key)
+            st.session_state["add_asset_count"] = st.session_state.get("add_asset_count", 0) + 1
             # the ticker search is over too: its message would describe an empty form
-            for key in ("lookup_isin", "lookup_results", "lookup_choice", "lookup_message"):
+            for key in ("lookup_results", "lookup_message"):
                 st.session_state.pop(key, None)
             set_flash(f"{asset.name} added.")
             st.rerun()
 
 
 def render_edit_asset(assets: list[Asset]) -> None:
-    asset = st.selectbox("Asset to edit", assets, format_func=lambda a: a.name)
+    asset = st.selectbox("Asset to edit", assets, format_func=asset_label)
     with st.form("edit_asset", border=False):
         inputs = asset_inputs(asset, key=f"edit_asset_{asset.id}")
         submitted = st.form_submit_button("Save changes", type="primary")
@@ -233,7 +242,7 @@ def render_manual_price(assets: list[Asset]) -> None:
     )
     with st.form("manual_price", border=False):
         left, middle, right = st.columns(3)
-        asset = left.selectbox("Asset", assets, format_func=lambda a: a.name, key="price_asset")
+        asset = left.selectbox("Asset", assets, format_func=asset_label, key="price_asset")
         day = middle.date_input(
             "Date", value="today", max_value="today", format="DD/MM/YYYY", key="price_date"
         )
@@ -255,7 +264,7 @@ def render_manual_price_list(assets: list[Asset]) -> None:
     manual = list_manual_prices(get_conn())
     if not manual:
         return
-    names = {asset.id: asset.name for asset in assets}
+    names = {asset.id: asset_label(asset) for asset in assets}
     choice = st.selectbox(
         "Manual prices",
         manual,

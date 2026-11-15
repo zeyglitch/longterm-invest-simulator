@@ -378,3 +378,10 @@ def test_a_position_without_price_is_not_called_stale():
     positions = compute_positions([ASSET_A], [trade(5, 1, "BUY", 1, 5.0)], {})
 
     assert stale_prices(positions, date(2026, 6, 1)) == []
+
+
+def test_two_assets_cannot_have_the_same_name():
+    new = Asset(None, "XX0000000009", " asset a ", None)  # same name, other case and spaces
+
+    assert asset_errors(new, [ASSET_A, ASSET_B]) == ["Another asset is already called asset a."]
+    assert asset_errors(new, [ASSET_B]) == []

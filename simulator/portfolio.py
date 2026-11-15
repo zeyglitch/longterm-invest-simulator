@@ -237,11 +237,18 @@ def trade_errors(tx: Transaction, other_transactions: list[Transaction], today: 
     return errors
 
 
-def asset_errors(asset: Asset) -> list[str]:
-    """Messages for what is wrong in an asset typed by the user (empty list if it is valid)."""
+def asset_errors(asset: Asset, other_assets: list[Asset] = ()) -> list[str]:
+    """Messages for what is wrong in an asset typed by the user (empty list if it is valid).
+
+    `other_assets` are the saved assets, without the one being edited: two assets with the same
+    name could not be told apart in the tables, the charts and the dropdowns.
+    """
     errors = []
-    if not asset.name.strip():
+    name = asset.name.strip().lower()
+    if not name:
         errors.append("The name is required.")
+    elif any(other.name.strip().lower() == name for other in other_assets):
+        errors.append(f"Another asset is already called {asset.name.strip()}.")
     if len(asset.isin) != 12 or not asset.isin.isalnum():
         errors.append("An ISIN has 12 letters and digits, for example FR0000000000.")
     if not 0 <= asset.fees < 0.05:

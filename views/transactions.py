@@ -16,7 +16,7 @@ from simulator.database import (
 from simulator.importer import export_transactions
 from simulator.models import Asset, CashMovement, Transaction
 from simulator.portfolio import first_oversold_sale, trade_errors
-from views.common import format_eur, get_conn, set_flash, show_flash
+from views.common import asset_label, format_eur, get_conn, set_flash, show_flash
 
 KINDS = {"Buy": "BUY", "Sell": "SELL"}
 CASH_KINDS = {"Deposit": "DEPOSIT", "Withdrawal": "WITHDRAWAL"}
@@ -68,7 +68,7 @@ def save_new_trade() -> None:
 def render_add_trade(assets: list[Asset]) -> None:
     left, middle, right = st.columns(3)
     left.date_input("Date", value="today", max_value="today", format=DATE_FORMAT, key="trade_date")
-    middle.selectbox("Asset", assets, format_func=lambda asset: asset.name, key="trade_asset")
+    middle.selectbox("Asset", assets, format_func=asset_label, key="trade_asset")
     kind_label = right.segmented_control(
         "Type", list(KINDS), default="Buy", required=True, key="trade_kind"
     )
@@ -153,7 +153,7 @@ def edit_trade_dialog(tx: Transaction, assets: list[Asset]) -> None:
         "Date", value=tx.date, max_value="today", format=DATE_FORMAT, key=f"{key}_d"
     )
     asset = st.selectbox(
-        "Asset", assets, index=current_asset, format_func=lambda a: a.name, key=f"{key}_a"
+        "Asset", assets, index=current_asset, format_func=asset_label, key=f"{key}_a"
     )
     kind_label = st.segmented_control(
         "Type", list(KINDS), default=KIND_LABELS[tx.kind], required=True, key=f"{key}_k"
@@ -234,7 +234,7 @@ def filter_trades(transactions: list[Transaction], assets: list[Asset]) -> list[
         "Asset",
         assets,
         index=None,
-        format_func=lambda a: a.name,
+        format_func=asset_label,
         placeholder="All assets",
         key="history_asset",
     )
