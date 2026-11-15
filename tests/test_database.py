@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from simulator.database import (
@@ -8,12 +9,18 @@ from simulator.database import (
     add_cash_movement,
     add_transaction,
     delete_cash_movement,
+    delete_manual_price,
     delete_transaction,
     get_asset_by_isin,
+    get_last_price,
+    get_price_history,
+    get_price_source,
     get_setting,
     list_assets,
     list_cash_movements,
+    list_manual_prices,
     list_transactions,
+    save_prices,
     set_setting,
     update_asset,
     update_transaction,
@@ -169,3 +176,82 @@ def test_setting_is_saved_and_can_be_overwritten(conn):
 
     set_setting(conn, "ps_rate", "0.186")
     assert get_setting(conn, "ps_rate") == "0.186"
+
+
+def make_series(values: dict[str, float]) -> pd.Series:
+    return pd.Series(list(values.values()), index=pd.to_datetime(list(values)))
+
+
+def test_saved_prices_can_be_read_back(conn):
+    asset_id = add_asset(conn, make_asset())
+
+    save_prices(conn, asset_id, make_series({"2026-03-02": 10.0, "2026-03-03": 11.0}), "yahoo")
+
+    history = get_price_history(conn, asset_id)
+    assert history.tolist() == [10.0, 11.0]
+    assert history.index[0] == pd.Timestamp("2026-03-02")
+    assert get_last_price(conn, asset_id) == (date(2026, 3, 3), 11.0)
+
+
+def test_saving_a_price_again_replaces_it(conn):
+    asset_id = add_asset(conn, make_asset())
+    save_prices(conn, asset_id, make_series({"2026-03-02": 10.0}), "yahoo")
+
+    save_prices(conn, asset_id, make_series({"2026-03-02": 10.5, "2026-03-03": 11.0}), "yahoo")
+
+    assert get_price_history(conn, asset_id).tolist() == [10.5, 11.0]
+
+
+def test_asset_without_price_has_no_last_price_and_an_empty_history(conn):
+    asset_id = add_asset(conn, make_asset())
+
+    assert get_last_price(conn, asset_id) is None
+    assert get_price_history(conn, asset_id).empty
+
+
+def test_manual_price_wins_over_yahoo_on_the_same_day(conn):
+    asset_id = add_asset(conn, make_asset())
+    save_prices(conn, asset_id, make_series({"2026-03-02": 10.0, "2026-03-03": 11.0}), "yahoo")
+    save_prices(conn, asset_id, make_series({"2026-03-03": 12.34}), "manual")
+
+    assert get_last_price(conn, asset_id) == (date(2026, 3, 3), 12.34)
+    assert get_price_history(conn, asset_id).tolist() == [10.0, 12.34]
+
+
+def test_a_newer_yahoo_price_wins_over_an_older_manual_one(conn):
+    asset_id = add_asset(conn, make_asset())
+    save_prices(conn, asset_id, make_series({"2026-03-02": 99.0}), "manual")
+    save_prices(conn, asset_id, make_series({"2026-03-03": 11.0}), "yahoo")
+
+    assert get_last_price(conn, asset_id) == (date(2026, 3, 3), 11.0)
+
+
+def test_last_price_on_a_date_never_comes_from_a_later_day(conn):
+    asset_id = add_asset(conn, make_asset())
+    save_prices(conn, asset_id, make_series({"2026-03-02": 10.0, "2026-03-05": 15.0}), "yahoo")
+
+    assert get_last_price(conn, asset_id, date(2026, 3, 4)) == (date(2026, 3, 2), 10.0)
+    assert get_last_price(conn, asset_id, date(2026, 3, 5)) == (date(2026, 3, 5), 15.0)
+    assert get_last_price(conn, asset_id, date(2026, 3, 1)) is None
+
+
+def test_price_source_is_manual_when_a_manual_price_exists_that_day(conn):
+    asset_id = add_asset(conn, make_asset())
+    save_prices(conn, asset_id, make_series({"2026-03-02": 10.0, "2026-03-03": 11.0}), "yahoo")
+    save_prices(conn, asset_id, make_series({"2026-03-03": 12.0}), "manual")
+
+    assert get_price_source(conn, asset_id, date(2026, 3, 2)) == "yahoo"
+    assert get_price_source(conn, asset_id, date(2026, 3, 3)) == "manual"
+    assert get_price_source(conn, asset_id, date(2026, 3, 4)) is None
+
+
+def test_deleting_a_manual_price_brings_back_the_yahoo_price(conn):
+    asset_id = add_asset(conn, make_asset())
+    save_prices(conn, asset_id, make_series({"2026-03-03": 11.0}), "yahoo")
+    save_prices(conn, asset_id, make_series({"2026-03-03": 12.0}), "manual")
+    assert list_manual_prices(conn) == [(asset_id, date(2026, 3, 3), 12.0)]
+
+    delete_manual_price(conn, asset_id, date(2026, 3, 3))
+
+    assert list_manual_prices(conn) == []
+    assert get_last_price(conn, asset_id) == (date(2026, 3, 3), 11.0)

@@ -1,6 +1,12 @@
 import csv
+from datetime import date
 
-from simulator.database import list_assets, list_cash_movements, list_transactions
+from simulator.database import (
+    get_last_price,
+    list_assets,
+    list_cash_movements,
+    list_transactions,
+)
 from simulator.demo import SAMPLE_DIR, build_demo_db
 
 
@@ -23,3 +29,20 @@ def test_demo_target_weights_add_up_to_100_percent():
     total = sum(asset.target_weight for asset in list_assets(conn))
 
     assert round(total, 6) == 1.0
+
+
+def test_demo_has_frozen_prices_for_every_asset():
+    conn = build_demo_db()
+
+    for asset in list_assets(conn):
+        last = get_last_price(conn, asset.id)
+        assert last is not None
+        assert last[0] == date(2026, 11, 13)
+        assert last[1] > 0
+
+
+def test_demo_prices_on_trade_days_match_the_trade_prices():
+    conn = build_demo_db()
+
+    for tx in list_transactions(conn):
+        assert get_last_price(conn, tx.asset_id, tx.date) == (tx.date, tx.unit_price)

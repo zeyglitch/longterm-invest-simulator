@@ -5,6 +5,7 @@ import streamlit as st
 from simulator import config
 from simulator.database import get_connection, init_db, list_transactions
 from simulator.demo import build_demo_db
+from simulator.prices import latest_price_date, refresh_prices
 from views.common import show_demo_banner
 
 st.set_page_config(layout="wide", page_title="Long-term Invest Simulator")
@@ -38,6 +39,22 @@ def choose_database() -> None:
     st.session_state["conn"] = st.session_state["demo_conn" if demo else "real_conn"]
 
 
+def render_price_refresh() -> None:
+    """Sidebar button that downloads new prices, and the date of the latest one."""
+    conn = st.session_state["conn"]
+    if st.sidebar.button("Refresh prices", icon=":material/refresh:", width="stretch"):
+        with st.spinner("Downloading prices from Yahoo Finance..."):
+            failures = refresh_prices(conn)
+        if failures:
+            st.sidebar.warning(
+                "No new price for: " + ", ".join(failures) + ". The last known prices are kept."
+            )
+        else:
+            st.sidebar.success("Prices updated.")
+    latest = latest_price_date(conn)
+    st.sidebar.caption(f"Latest price: {latest:%d/%m/%Y}" if latest else "No price yet")
+
+
 pages = {
     "Tracking": [
         st.Page("views/portfolio.py", title="Portfolio", default=True),
@@ -59,7 +76,8 @@ choose_database()
 
 with st.sidebar:
     st.caption("Demo data" if st.session_state["demo"] else "My portfolio")
-    st.caption("Educational tool. Not financial advice.")
+render_price_refresh()
+st.sidebar.caption("Educational tool. Not financial advice.")
 
 show_demo_banner()
 page.run()

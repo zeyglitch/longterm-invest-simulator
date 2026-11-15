@@ -2,6 +2,8 @@ import csv
 import sqlite3
 from datetime import date
 
+import pandas as pd
+
 from simulator import config
 from simulator.database import (
     add_asset,
@@ -10,6 +12,7 @@ from simulator.database import (
     get_asset_by_isin,
     get_connection,
     init_db,
+    save_prices,
 )
 from simulator.models import Asset, CashMovement, Transaction
 
@@ -60,4 +63,15 @@ def build_demo_db(path: str = ":memory:") -> sqlite3.Connection:
         )
         add_cash_movement(conn, movement)
 
+    _load_frozen_prices(conn)
     return conn
+
+
+def _load_frozen_prices(conn: sqlite3.Connection) -> None:
+    """Prices saved once for the demo, so that it works without network and never changes."""
+    closes: dict[str, dict[str, float]] = {}
+    for row in _read_rows("demo_prices.csv"):
+        closes.setdefault(row["isin"], {})[row["date"]] = float(row["close"])
+    for isin, by_day in closes.items():
+        prices = pd.Series(list(by_day.values()), index=pd.to_datetime(list(by_day)))
+        save_prices(conn, get_asset_by_isin(conn, isin).id, prices, "yahoo")

@@ -2,6 +2,8 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
 from simulator.models import Asset, CashMovement, Transaction
 
 SCHEMA = """
@@ -217,5 +219,73 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
         "INSERT INTO settings (key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, str(value)),
+    )
+    conn.commit()
+
+
+def save_prices(conn: sqlite3.Connection, asset_id: int, prices: pd.Series, source: str) -> None:
+    """Store a series of closing prices (index = dates). A price already stored is replaced."""
+    rows = [
+        (asset_id, day.date().isoformat(), float(close), source) for day, close in prices.items()
+    ]
+    conn.executemany(
+        "INSERT INTO prices (asset_id, date, close, source) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(asset_id, date, source) DO UPDATE SET close = excluded.close",
+        rows,
+    )
+    conn.commit()
+
+
+def get_last_price(
+    conn: sqlite3.Connection, asset_id: int, on_date: date | None = None
+) -> tuple[date, float] | None:
+    """Latest price on or before `on_date` (default: any date) as (date, close), or None.
+
+    On a day that has both a manual and a Yahoo price, the manual one is returned.
+    """
+    limit = (on_date or date.max).isoformat()
+    row = conn.execute(
+        "SELECT date, close FROM prices WHERE asset_id = ? AND date <= ? "
+        "ORDER BY date DESC, CASE source WHEN 'manual' THEN 0 ELSE 1 END LIMIT 1",
+        (asset_id, limit),
+    ).fetchone()
+    return (date.fromisoformat(row["date"]), row["close"]) if row else None
+
+
+def get_price_history(conn: sqlite3.Connection, asset_id: int) -> pd.Series:
+    """One price per day, oldest first. The manual price wins over the Yahoo one on a same day."""
+    rows = conn.execute(
+        "SELECT date, close FROM prices WHERE asset_id = ? "
+        "ORDER BY date, CASE source WHEN 'manual' THEN 1 ELSE 0 END",
+        (asset_id,),
+    ).fetchall()
+    # rows of a same day come with the manual one last, so it replaces the Yahoo one
+    closes = {row["date"]: row["close"] for row in rows}
+    return pd.Series(list(closes.values()), index=pd.to_datetime(list(closes)), dtype=float)
+
+
+def get_price_source(conn: sqlite3.Connection, asset_id: int, day: date) -> str | None:
+    """'manual' or 'yahoo': where the price of that day comes from, or None if there is none."""
+    row = conn.execute(
+        "SELECT source FROM prices WHERE asset_id = ? AND date = ? "
+        "ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END LIMIT 1",
+        (asset_id, day.isoformat()),
+    ).fetchone()
+    return row["source"] if row else None
+
+
+def list_manual_prices(conn: sqlite3.Connection) -> list[tuple[int, date, float]]:
+    """Prices typed by hand as (asset id, date, price), most recent first."""
+    rows = conn.execute(
+        "SELECT asset_id, date, close FROM prices WHERE source = 'manual' ORDER BY date DESC"
+    ).fetchall()
+    return [(row["asset_id"], date.fromisoformat(row["date"]), row["close"]) for row in rows]
+
+
+def delete_manual_price(conn: sqlite3.Connection, asset_id: int, day: date) -> None:
+    """Remove a hand-typed price: the Yahoo price of that day, if any, applies again."""
+    conn.execute(
+        "DELETE FROM prices WHERE asset_id = ? AND date = ? AND source = 'manual'",
+        (asset_id, day.isoformat()),
     )
     conn.commit()

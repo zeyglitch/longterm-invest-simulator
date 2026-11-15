@@ -3,10 +3,20 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
-from simulator.database import add_asset, list_assets, update_asset
+from simulator.database import (
+    add_asset,
+    delete_manual_price,
+    get_last_price,
+    get_price_source,
+    list_assets,
+    list_manual_prices,
+    save_prices,
+    update_asset,
+)
 from simulator.models import Asset
 from simulator.portfolio import asset_errors, target_weights_total
-from views.common import format_pct, get_conn, set_flash, show_flash
+from simulator.prices import fetch_last_price, find_ticker
+from views.common import format_eur, format_pct, get_conn, set_flash, show_flash
 
 
 def asset_from_inputs(asset_id, name, isin, ticker, fees_pct, weight_pct) -> Asset:
@@ -89,6 +99,57 @@ def render_asset_list(assets: list[Asset]) -> None:
         st.warning(f"Target weights add up to {format_pct(total)} instead of 100 %.")
 
 
+def use_ticker_result() -> None:
+    """Called when `Use this ticker` is clicked: test the ticker, then fill the add form."""
+    result = st.session_state["lookup_choice"]
+    price = fetch_last_price(result["ticker"])
+    if price is None:
+        st.session_state["lookup_message"] = (
+            "warning",
+            f"{result['ticker']} gave no price: Yahoo may be unreachable, or this is not the "
+            "right listing. Pick another one, or fill the form by hand.",
+        )
+        return
+    day, close = price
+    st.session_state["add_asset_isin"] = st.session_state["lookup_isin"].strip().upper()
+    st.session_state["add_asset_ticker"] = result["ticker"]
+    if not st.session_state["add_asset_name"]:
+        st.session_state["add_asset_name"] = result["name"]
+    st.session_state["lookup_message"] = (
+        "success",
+        f"{result['ticker']} works: last price {format_eur(close)} on {day:%d/%m/%Y}. "
+        "The form below is filled in: check it and add the asset.",
+    )
+
+
+def render_ticker_lookup() -> None:
+    """Find the Yahoo ticker of an ISIN. Outside the form below: a form cannot hold a search."""
+    left, right = st.columns([3, 1], vertical_alignment="bottom")
+    isin = left.text_input("Look up a ticker from an ISIN", key="lookup_isin", max_chars=12)
+    if right.button("Search", icon=":material/search:", key="lookup_search") and isin.strip():
+        results = find_ticker(isin.strip().upper())
+        st.session_state["lookup_results"] = results
+        st.session_state["lookup_message"] = (
+            None
+            if results
+            else ("warning", "Yahoo found nothing for this ISIN, or did not answer.")
+        )
+    results = st.session_state.get("lookup_results")
+    if results:
+        st.selectbox(
+            "Matching listings",
+            results,
+            format_func=lambda r: f"{r['ticker']} — {r['name']} ({r['exchange']})",
+            key="lookup_choice",
+            help="Paris listings come first. Choose the one in euros that you trade.",
+        )
+        st.button("Use this ticker", on_click=use_ticker_result)
+    message = st.session_state.get("lookup_message")
+    if message:
+        kind, text = message
+        (st.success if kind == "success" else st.warning)(text)
+
+
 def render_add_asset() -> None:
     with st.form("add_asset", border=False):
         inputs = asset_inputs(None, key="add_asset")
@@ -128,7 +189,74 @@ st.subheader("Assets")
 assets = list_assets(get_conn())
 render_asset_list(assets)
 with st.expander("Add an asset", expanded=not assets):
+    render_ticker_lookup()
     render_add_asset()
 if assets:
     with st.expander("Edit an asset"):
         render_edit_asset(assets)
+
+
+def render_price_table(assets: list[Asset]) -> None:
+    rows = []
+    for asset in assets:
+        last = get_last_price(get_conn(), asset.id)
+        rows.append(
+            {
+                "Asset": asset.name,
+                "Last price": format_eur(last[1]) if last else "—",
+                "Date": f"{last[0]:%d/%m/%Y}" if last else "—",
+                "Source": get_price_source(get_conn(), asset.id, last[0]) if last else "—",
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+    st.caption("`yahoo`: downloaded with Refresh prices. `manual`: typed by you.")
+
+
+def render_manual_price(assets: list[Asset]) -> None:
+    st.caption(
+        "A manual price replaces the Yahoo price of that day. Use it when Yahoo has no price "
+        "for an asset, or a wrong one."
+    )
+    with st.form("manual_price", border=False):
+        left, middle, right = st.columns(3)
+        asset = left.selectbox("Asset", assets, format_func=lambda a: a.name, key="price_asset")
+        day = middle.date_input(
+            "Date", value="today", max_value="today", format="DD/MM/YYYY", key="price_date"
+        )
+        price = right.number_input(
+            "Price (€)", min_value=0.0, value=None, step=0.01, format="%.4f", key="price_value"
+        )
+        submitted = st.form_submit_button("Save manual price", type="primary")
+    if not submitted:
+        return
+    if not price:
+        st.error("The price must be greater than 0.")
+        return
+    save_prices(get_conn(), asset.id, pd.Series([price], index=[pd.Timestamp(day)]), "manual")
+    set_flash(f"Manual price of {format_eur(price)} saved for {asset.name} on {day:%d/%m/%Y}.")
+    st.rerun()
+
+
+def render_manual_price_list(assets: list[Asset]) -> None:
+    manual = list_manual_prices(get_conn())
+    if not manual:
+        return
+    names = {asset.id: asset.name for asset in assets}
+    choice = st.selectbox(
+        "Manual prices",
+        manual,
+        format_func=lambda m: f"{names[m[0]]} — {m[1]:%d/%m/%Y} — {format_eur(m[2])}",
+        key="manual_price_choice",
+    )
+    if st.button("Delete this manual price", key="manual_price_delete"):
+        delete_manual_price(get_conn(), choice[0], choice[1])
+        set_flash("Manual price deleted.")
+        st.rerun()
+
+
+if assets:
+    st.subheader("Prices")
+    render_price_table(assets)
+    with st.expander("Enter a manual price"):
+        render_manual_price(assets)
+        render_manual_price_list(assets)
