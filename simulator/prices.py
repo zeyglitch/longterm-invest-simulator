@@ -7,7 +7,7 @@ import pandas as pd
 import yfinance as yf
 from yfinance.exceptions import YFException
 
-from simulator.database import get_last_price, list_assets, save_prices
+from simulator.database import get_last_price, get_last_yahoo_date, list_assets, save_prices
 
 # a few days back is enough to find the last close, even after a long weekend
 LAST_PRICE_WINDOW_DAYS = 10
@@ -59,7 +59,8 @@ def fetch_history(ticker: str, start: date | None = None) -> pd.Series:
     # no network, unknown symbol, rate limit or unreadable answer: the caller keeps its old prices
     except (YFException, OSError, ValueError):
         return pd.Series(dtype=float)
-    if table is None or table.empty:
+    # an answer without closing prices is treated like no answer
+    if table is None or table.empty or "Close" not in table.columns:
         return pd.Series(dtype=float)
 
     closes = table["Close"]
@@ -91,8 +92,9 @@ def refresh_prices(conn: sqlite3.Connection) -> list[str]:
         if not asset.ticker:
             failures.append(asset.name)
             continue
-        last = get_last_price(conn, asset.id)
-        start = None if last is None else last[0] - timedelta(days=REFRESH_OVERLAP_DAYS)
+        # a price typed by hand does not count: the Yahoo history may still be missing
+        last = get_last_yahoo_date(conn, asset.id)
+        start = None if last is None else last - timedelta(days=REFRESH_OVERLAP_DAYS)
         history = fetch_history(asset.ticker, start)
         if history.empty:
             failures.append(asset.name)

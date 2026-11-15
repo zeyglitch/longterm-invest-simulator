@@ -163,6 +163,9 @@ def render_add_asset() -> None:
             # forget the typed values so the form comes back empty
             for field in ("name", "isin", "ticker", "fees", "weight"):
                 del st.session_state[f"add_asset_{field}"]
+            # the ticker search is over too: its message would describe an empty form
+            for key in ("lookup_isin", "lookup_results", "lookup_choice", "lookup_message"):
+                st.session_state.pop(key, None)
             set_flash(f"{asset.name} added.")
             st.rerun()
 

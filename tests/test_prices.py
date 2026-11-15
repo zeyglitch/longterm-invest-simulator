@@ -42,6 +42,13 @@ def test_empty_answer_gives_no_price(monkeypatch):
     assert prices.fetch_last_price("TEST.PA") is None
 
 
+def test_answer_without_close_column_gives_no_price(monkeypatch):
+    table = pd.DataFrame({"Open": [1.0]}, index=pd.to_datetime(["2026-11-13"]))
+    monkeypatch.setattr(prices, "_download", fake_download(table))
+
+    assert prices.fetch_history("TEST.PA").empty
+
+
 @pytest.mark.parametrize(
     "error", [YFRateLimitError(), ConnectionError("offline"), ValueError("bad")]
 )
@@ -110,6 +117,22 @@ def test_refresh_asks_for_the_whole_history_first_then_only_the_recent_days(conn
 
     assert get_last_price(conn, asset_id) == (date(2026, 3, 10), 10.0)
     assert starts == [None, date(2026, 3, 3)]  # seven days before the last stored price
+
+
+def test_refresh_asks_for_the_whole_history_when_only_a_manual_price_exists(conn, monkeypatch):
+    asset_id = add_test_asset(conn)
+    save_prices(conn, asset_id, series({"2026-03-10": 10.0}), "manual")
+    starts = []
+
+    def record_start(ticker, start):
+        starts.append(start)
+        return series({"2026-03-09": 9.0})
+
+    monkeypatch.setattr(prices, "fetch_history", record_start)
+
+    prices.refresh_prices(conn)
+
+    assert starts == [None]
 
 
 def test_latest_price_date_is_the_most_recent_of_all_assets(conn):

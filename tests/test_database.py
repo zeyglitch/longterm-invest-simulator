@@ -13,6 +13,7 @@ from simulator.database import (
     delete_transaction,
     get_asset_by_isin,
     get_last_price,
+    get_last_yahoo_date,
     get_price_history,
     get_price_source,
     get_setting,
@@ -255,3 +256,27 @@ def test_deleting_a_manual_price_brings_back_the_yahoo_price(conn):
 
     assert list_manual_prices(conn) == []
     assert get_last_price(conn, asset_id) == (date(2026, 3, 3), 11.0)
+
+
+def test_changing_the_ticker_drops_the_yahoo_prices_but_keeps_the_manual_ones(conn):
+    asset = make_asset()
+    asset.id = add_asset(conn, asset)
+    save_prices(conn, asset.id, make_series({"2026-03-02": 10.0, "2026-03-03": 11.0}), "yahoo")
+    save_prices(conn, asset.id, make_series({"2026-03-03": 12.0}), "manual")
+
+    asset.ticker = "OTHER.PA"
+    update_asset(conn, asset)
+
+    assert get_price_history(conn, asset.id).tolist() == [12.0]
+    assert get_last_yahoo_date(conn, asset.id) is None
+
+
+def test_editing_an_asset_without_changing_its_ticker_keeps_its_prices(conn):
+    asset = make_asset()
+    asset.id = add_asset(conn, asset)
+    save_prices(conn, asset.id, make_series({"2026-03-02": 10.0}), "yahoo")
+
+    asset.name = "Renamed fund"
+    update_asset(conn, asset)
+
+    assert get_last_yahoo_date(conn, asset.id) == date(2026, 3, 2)

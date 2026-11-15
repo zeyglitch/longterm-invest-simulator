@@ -96,6 +96,11 @@ def add_asset(conn: sqlite3.Connection, asset: Asset) -> int:
 
 
 def update_asset(conn: sqlite3.Connection, asset: Asset) -> None:
+    """Save the changes of an asset. A new ticker drops its Yahoo prices: they were another's."""
+    old = conn.execute("SELECT ticker FROM assets WHERE id = ?", (asset.id,)).fetchone()
+    if old is not None and old["ticker"] != asset.ticker:
+        # the next refresh downloads the whole history of the new ticker; manual prices stay
+        conn.execute("DELETE FROM prices WHERE asset_id = ? AND source = 'yahoo'", (asset.id,))
     conn.execute(
         "UPDATE assets SET isin = ?, name = ?, ticker = ?, fees = ?, target_weight = ? "
         "WHERE id = ?",
@@ -250,6 +255,15 @@ def get_last_price(
         (asset_id, limit),
     ).fetchone()
     return (date.fromisoformat(row["date"]), row["close"]) if row else None
+
+
+def get_last_yahoo_date(conn: sqlite3.Connection, asset_id: int) -> date | None:
+    """Date of the latest price downloaded from Yahoo, or None if none was ever downloaded."""
+    row = conn.execute(
+        "SELECT MAX(date) AS date FROM prices WHERE asset_id = ? AND source = 'yahoo'",
+        (asset_id,),
+    ).fetchone()
+    return date.fromisoformat(row["date"]) if row["date"] else None
 
 
 def get_price_history(conn: sqlite3.Connection, asset_id: int) -> pd.Series:
