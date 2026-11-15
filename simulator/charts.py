@@ -1,0 +1,96 @@
+"""Plotly figures. The only module of the package that draws: each function takes DataFrames."""
+
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# one palette for the whole app: the same asset or curve keeps its colour on every page
+PALETTE = ["#5b8def", "#f2a93b", "#3dbe8b", "#b07cf0", "#ef6f6c", "#4fc3d9", "#c7b94a", "#8a94a6"]
+VALUE_COLOR = PALETTE[0]
+INVESTED_COLOR = "#8a94a6"
+
+TRANSPARENT = "rgba(0,0,0,0)"
+
+
+def _base_figure(**layout) -> go.Figure:
+    """A figure with the dark look shared by all charts. Separators give 12 345.67."""
+    figure = go.Figure()
+    figure.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=TRANSPARENT,
+        plot_bgcolor=TRANSPARENT,
+        separators=". ",
+        margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        **layout,
+    )
+    return figure
+
+
+def allocation_chart(table: pd.DataFrame) -> go.Figure:
+    """Two rings: actual weights and target weights.
+
+    `table` has the columns `name`, `weight` and `target_weight` (decimals, empty if unknown).
+    Each asset keeps the same colour in both rings. The target ring is left out when no asset
+    has a target.
+    """
+    colours = {name: PALETTE[i % len(PALETTE)] for i, name in enumerate(table["name"])}
+    actual = table[table["weight"].fillna(0) > 0]
+    target = table[table["target_weight"].fillna(0) > 0]
+    rings = [("Actual", actual, "weight")]
+    if not target.empty:
+        rings.append(("Target", target, "target_weight"))
+
+    figure = make_subplots(rows=1, cols=len(rings), specs=[[{"type": "domain"}] * len(rings)])
+    for column, (title, rows, field) in enumerate(rings, start=1):
+        figure.add_trace(
+            go.Pie(
+                labels=rows["name"],
+                values=rows[field],
+                hole=0.55,
+                sort=False,
+                marker={"colors": [colours[name] for name in rows["name"]]},
+                texttemplate="%{percent:.1%}",
+                hovertemplate="%{label}: %{percent:.1%}<extra></extra>",
+                title={"text": title},
+            ),
+            row=1,
+            col=column,
+        )
+    figure.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=TRANSPARENT,
+        plot_bgcolor=TRANSPARENT,
+        separators=". ",
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        legend={"orientation": "h", "y": -0.05},
+    )
+    return figure
+
+
+def history_chart(history: pd.DataFrame) -> go.Figure:
+    """Portfolio value against the amount invested over time (`date`, `value`, `invested`)."""
+    figure = _base_figure(
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.1, "x": 0},
+        yaxis={"ticksuffix": " €", "tickformat": ",.0f"},
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=history["date"],
+            y=history["value"],
+            name="Value",
+            line={"color": VALUE_COLOR, "width": 2},
+            hovertemplate="%{y:,.2f} €",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=history["date"],
+            y=history["invested"],
+            name="Invested",
+            # the invested amount only changes on a trade: it stays flat in between
+            line={"color": INVESTED_COLOR, "width": 2, "shape": "hv"},
+            hovertemplate="%{y:,.2f} €",
+        )
+    )
+    return figure

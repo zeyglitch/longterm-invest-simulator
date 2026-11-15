@@ -111,6 +111,53 @@ def realised_gains(
     return pd.DataFrame(rows, columns=columns)
 
 
+def _price_on(prices: pd.Series | None, day: pd.Timestamp, fallback: float) -> float:
+    """Last known price on or before `day`, never a later one; `fallback` if there is none."""
+    if prices is None or prices.empty:
+        return fallback
+    price = prices.asof(day)
+    return fallback if pd.isna(price) else float(price)
+
+
+def portfolio_history(
+    transactions: list[Transaction],
+    price_history: dict[int, pd.Series],
+    freq: str = "W",
+    include_fees: bool = True,
+    end: date | None = None,
+) -> pd.DataFrame:
+    """Value and invested amount of the portfolio on a weekly grid, as `date`, `value`, `invested`.
+
+    The grid goes from the first trade to `end` (default: today); both ends are always in it.
+    `price_history` maps an asset id to its closing prices. On a day without a price, the last
+    earlier price is used. Before any price exists, the last trade price stands in for it.
+    """
+    columns = ["date", "value", "invested"]
+    ordered = _in_processing_order(transactions)
+    if not ordered:
+        return pd.DataFrame(columns=columns)
+
+    start = ordered[0].date
+    stop = max(end or date.today(), start)
+    weekly = pd.date_range(start, stop, freq=freq)
+    days = sorted({pd.Timestamp(start), pd.Timestamp(stop), *weekly})
+
+    rows = []
+    for day in days:
+        known = [tx for tx in ordered if tx.date <= day.date()]
+        holdings, _ = _replay(known, include_fees)
+        last_trade_price = {tx.asset_id: tx.unit_price for tx in known}
+        value = invested = 0.0
+        for asset_id, holding in holdings.items():
+            if holding["quantity"] <= 0:
+                continue
+            invested += holding["cost"]
+            price = _price_on(price_history.get(asset_id), day, last_trade_price[asset_id])
+            value += holding["quantity"] * price
+        rows.append((day, value, invested))
+    return pd.DataFrame(rows, columns=columns)
+
+
 def quantity_held(transactions: list[Transaction], asset_id: int, on_date: date) -> float:
     """Number of shares of an asset held at the end of `on_date` (trades of that day included)."""
     quantity = 0.0

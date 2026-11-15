@@ -1,5 +1,6 @@
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from simulator.models import Asset, CashMovement, Transaction
@@ -8,6 +9,7 @@ from simulator.portfolio import (
     compute_positions,
     first_oversold_sale,
     gross_deposits,
+    portfolio_history,
     quantity_held,
     realised_gains,
     target_weights_total,
@@ -274,3 +276,75 @@ def test_removing_a_buy_needed_by_a_sale_is_detected():
     assert first_oversold_sale([P3_TRADES[0], P3_TRADES[2]]) is None
     # without its first buy, 20 held: fine too ; without both, the sale has nothing to sell
     assert first_oversold_sale([P3_TRADES[2]]) is P3_TRADES[2]
+
+
+# H1, H2: 10 shares at 5.00 on Monday 05/01, 10 more at 6.00 on Monday 12/01
+H_TRADES = [trade(5, 1, "BUY", 10, 5.0), trade(12, 1, "BUY", 10, 6.0)]
+
+
+def closes(values: dict[str, float]) -> pd.Series:
+    return pd.Series(list(values.values()), index=pd.to_datetime(list(values)), dtype=float)
+
+
+def history_on(history: pd.DataFrame, day: str) -> pd.Series:
+    return history[history["date"] == pd.Timestamp(day)].iloc[0]
+
+
+def test_history_values_the_portfolio_with_the_price_of_the_day():
+    prices = {1: closes({"2026-01-05": 5.0, "2026-01-12": 6.0})}
+
+    history = portfolio_history(H_TRADES, prices, end=date(2026, 1, 12))
+
+    last = history_on(history, "2026-01-12")
+    assert last["value"] == pytest.approx(120.0)  # 20 shares at 6.00
+    assert last["invested"] == pytest.approx(110.0)  # 50 + 60
+    assert history["date"].iloc[0] == pd.Timestamp("2026-01-05")  # first trade
+    assert history["date"].iloc[-1] == pd.Timestamp("2026-01-12")  # end
+
+
+def test_history_uses_the_last_earlier_price_when_a_day_has_none():
+    # no price on Sunday 11/01 and the 6.00 of the 12th must not leak backwards
+    prices = {1: closes({"2026-01-05": 5.0, "2026-01-12": 6.0})}
+
+    history = portfolio_history(H_TRADES, prices, end=date(2026, 1, 18))
+
+    sunday = history_on(history, "2026-01-11")
+    assert sunday["value"] == pytest.approx(50.0)  # 10 shares, still at the 5.00 of the 5th
+    assert sunday["invested"] == pytest.approx(50.0)
+    assert history_on(history, "2026-01-18")["value"] == pytest.approx(120.0)  # price of the 12th
+
+
+def test_history_falls_back_on_the_last_trade_price_before_any_price_exists():
+    history = portfolio_history(H_TRADES, {}, end=date(2026, 1, 12))
+
+    assert history_on(history, "2026-01-12")["value"] == pytest.approx(120.0)  # 20 at 6.00
+
+
+def test_history_follows_sales_and_fees():
+    trades = [trade(5, 1, "BUY", 10, 5.0, 1.0), trade(12, 1, "SELL", 4, 7.0, 1.0)]
+    prices = {1: closes({"2026-01-05": 5.0, "2026-01-12": 7.0})}
+
+    history = portfolio_history(trades, prices, end=date(2026, 1, 12))
+
+    assert history_on(history, "2026-01-05")["invested"] == pytest.approx(51.0)
+    after_sale = history_on(history, "2026-01-12")
+    assert after_sale["value"] == pytest.approx(42.0)  # 6 shares at 7.00
+    assert after_sale["invested"] == pytest.approx(51.0 * 0.6)  # 4 of 10 shares left at avg cost
+
+
+def test_history_adds_the_values_of_several_assets():
+    trades = [trade(5, 1, "BUY", 10, 5.0), trade(5, 2, "BUY", 2.5, 40.0)]
+    prices = {1: closes({"2026-01-05": 6.0}), 2: closes({"2026-01-05": 42.0})}
+
+    history = portfolio_history(trades, prices, end=date(2026, 1, 5))
+
+    assert len(history) == 1
+    assert history["value"].iloc[0] == pytest.approx(165.0)
+    assert history["invested"].iloc[0] == pytest.approx(150.0)
+
+
+def test_history_without_trade_is_empty():
+    history = portfolio_history([], {})
+
+    assert history.empty
+    assert list(history.columns) == ["date", "value", "invested"]

@@ -17,6 +17,11 @@ def format_pct(rate: float | None, decimals: int = 1) -> str:
     return f"{rate * 100:.{decimals}f} %"
 
 
+def format_quantity(quantity: float) -> str:
+    """A number of shares without useless zeros: 651 or 2.5 or 0.1234 (fractions come to 4)."""
+    return f"{quantity:,.4f}".replace(",", " ").rstrip("0").rstrip(".")
+
+
 def get_conn() -> sqlite3.Connection:
     """The database chosen in app.py: the demo one or the real one."""
     return st.session_state["conn"]
