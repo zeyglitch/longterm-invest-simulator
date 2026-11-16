@@ -54,3 +54,31 @@ class TaxSettings:
     ir_rate: float  # income tax part of the flat tax (PFU)
     pea_ceiling: float  # maximum total of deposits on the PEA, in euros
     pea_open_date: date | None  # needed to know when the 5 years are over
+
+
+@dataclass
+class Phase:
+    """A period of regular monthly deposits. An amount of 0 is a pause."""
+
+    label: str
+    start: date
+    end: date
+    monthly_amount: float
+    annual_increase: float = 0.0  # decimal: 0.02 raises the amount by 2% each year
+
+
+@dataclass
+class OneOff:
+    label: str
+    date: date
+    amount: float  # positive = deposit, negative = withdrawal
+
+
+@dataclass
+class Plan:
+    """The future of the deposits, shared by the simulation pages."""
+
+    name: str
+    end: date
+    phases: list[Phase]
+    one_offs: list[OneOff]

@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 from simulator import config
-from simulator.models import Asset, CashMovement, TaxSettings, Transaction
+from simulator.models import Asset, CashMovement, Plan, TaxSettings, Transaction
+from simulator.plan import plan_from_json, plan_to_json
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assets (
@@ -354,4 +355,29 @@ def delete_manual_price(conn: sqlite3.Connection, asset_id: int, day: date) -> N
         "DELETE FROM prices WHERE asset_id = ? AND date = ? AND source = 'manual'",
         (asset_id, day.isoformat()),
     )
+    conn.commit()
+
+
+def save_plan(conn: sqlite3.Connection, plan: Plan) -> None:
+    """Store a plan under its name, replacing the plan that already had that name."""
+    conn.execute(
+        "INSERT INTO plans (name, content) VALUES (?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET content = excluded.content",
+        (plan.name, plan_to_json(plan)),
+    )
+    conn.commit()
+
+
+def load_plan(conn: sqlite3.Connection, name: str) -> Plan | None:
+    row = conn.execute("SELECT content FROM plans WHERE name = ?", (name,)).fetchone()
+    return plan_from_json(row["content"]) if row else None
+
+
+def list_plan_names(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("SELECT name FROM plans ORDER BY name").fetchall()
+    return [row["name"] for row in rows]
+
+
+def delete_plan(conn: sqlite3.Connection, name: str) -> None:
+    conn.execute("DELETE FROM plans WHERE name = ?", (name,))
     conn.commit()
