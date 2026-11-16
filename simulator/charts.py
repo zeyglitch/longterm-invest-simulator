@@ -8,6 +8,8 @@ from plotly.subplots import make_subplots
 PALETTE = ["#5b8def", "#f2a93b", "#3dbe8b", "#b07cf0", "#ef6f6c", "#4fc3d9", "#c7b94a", "#8a94a6"]
 VALUE_COLOR = PALETTE[0]
 INVESTED_COLOR = "#8a94a6"
+DEPOSIT_COLOR = PALETTE[2]
+WITHDRAWAL_COLOR = PALETTE[4]
 
 TRANSPARENT = "rgba(0,0,0,0)"
 
@@ -93,4 +95,46 @@ def history_chart(history: pd.DataFrame) -> go.Figure:
             hovertemplate="%{y:,.2f} €",
         )
     )
+    return figure
+
+
+def contributions_chart(flows: pd.Series, one_offs: pd.DataFrame) -> go.Figure:
+    """Monthly deposit of the plan over time, with a marker for each one-off event.
+
+    `flows` holds the regular deposit of each month (index: dates). `one_offs` has the columns
+    `date`, `amount` and `label`. A marker sits on the bar of its month, so that a large one-off
+    does not flatten the bars; its amount is in the hover text.
+    """
+    figure = _base_figure(
+        legend={"orientation": "h", "y": 1.1, "x": 0},
+        yaxis={"ticksuffix": " €", "tickformat": ",.0f"},
+        bargap=0,
+    )
+    figure.add_trace(
+        go.Bar(
+            x=flows.index,
+            y=flows.values,
+            name="Monthly deposit",
+            marker={"color": VALUE_COLOR, "line": {"width": 0}},
+            hovertemplate="%{x|%b %Y}: %{y:,.2f} €<extra></extra>",
+        )
+    )
+    kinds = [
+        ("One-off deposit", one_offs[one_offs["amount"] > 0], DEPOSIT_COLOR, "triangle-up"),
+        ("Withdrawal", one_offs[one_offs["amount"] < 0], WITHDRAWAL_COLOR, "triangle-down"),
+    ]
+    for name, rows, colour, symbol in kinds:
+        if rows.empty:
+            continue
+        figure.add_trace(
+            go.Scatter(
+                x=rows["date"],
+                y=[flows.get(day, 0.0) for day in rows["date"]],
+                mode="markers",
+                name=name,
+                marker={"color": colour, "size": 13, "symbol": symbol},
+                customdata=rows[["label", "amount"]],
+                hovertemplate="%{customdata[0]}: %{customdata[1]:,.2f} €<extra></extra>",
+            )
+        )
     return figure

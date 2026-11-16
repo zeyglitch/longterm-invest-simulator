@@ -5,7 +5,20 @@ import pytest
 
 from simulator.database import delete_plan, list_plan_names, load_plan, save_plan
 from simulator.models import OneOff, Phase, Plan
-from simulator.plan import build_flows, plan_from_json, plan_to_json, validate_plan
+from simulator.plan import (
+    add_big_purchase,
+    add_child,
+    add_home_purchase,
+    add_job_change,
+    add_unemployment,
+    add_windfall,
+    build_flows,
+    plan_from_frames,
+    plan_from_json,
+    plan_to_frames,
+    plan_to_json,
+    validate_plan,
+)
 from simulator.projection import project
 
 START = date(2026, 12, 15)  # month 1 is January 2027
@@ -166,3 +179,155 @@ def test_unknown_or_deleted_plan_is_none(conn):
 
     assert load_plan(conn, "Test plan") is None
     assert list_plan_names(conn) == []
+
+
+# Life event helpers, on a simple plan: 300 a month from 2027 to 2036
+
+
+def simple_plan() -> Plan:
+    return plan_with(
+        [Phase("Job", date(2027, 1, 1), date(2036, 12, 31), 300.0)], end=date(2036, 12, 31)
+    )
+
+
+def phase_summary(plan: Plan) -> list[tuple]:
+    return [(p.label, p.start, p.end, p.monthly_amount) for p in plan.phases]
+
+
+def test_job_change_ends_the_current_phase_and_opens_a_new_one():
+    plan = add_job_change(simple_plan(), date(2030, 9, 12), 500.0)
+
+    assert phase_summary(plan) == [
+        ("Job", date(2027, 1, 1), date(2030, 8, 31), 300.0),
+        ("New job", date(2030, 9, 1), date(2036, 12, 31), 500.0),
+    ]
+    assert validate_plan(plan) == []
+
+
+def test_job_change_outside_any_phase_runs_to_the_next_phase_or_the_end():
+    later = plan_with([Phase("Later", date(2030, 1, 1), date(2031, 12, 31), 300.0)])
+
+    before = add_job_change(later, date(2028, 3, 1), 150.0)
+    after = add_job_change(later, date(2033, 3, 1), 600.0)  # the plan ends on 31/12/2029
+
+    assert phase_summary(before)[0] == ("New job", date(2028, 3, 1), date(2029, 12, 31), 150.0)
+    assert phase_summary(after)[-1] == ("New job", date(2033, 3, 1), date(2033, 3, 31), 600.0)
+    assert validate_plan(before) == []
+    assert validate_plan(after) == []
+
+
+def test_unemployment_pauses_the_deposits_then_they_resume():
+    plan = add_unemployment(simple_plan(), date(2029, 4, 10), 6)
+
+    assert phase_summary(plan) == [
+        ("Job", date(2027, 1, 1), date(2029, 3, 31), 300.0),
+        ("Unemployment", date(2029, 4, 1), date(2029, 9, 30), 0.0),
+        ("Job", date(2029, 10, 1), date(2036, 12, 31), 300.0),
+    ]
+    assert validate_plan(plan) == []
+    assert build_flows(plan, START).sum() == pytest.approx(300.0 * (120 - 6))
+
+
+def test_a_phase_with_raises_resumes_at_the_amount_it_had_reached():
+    raised = plan_with([Phase("Job", date(2027, 1, 1), date(2036, 12, 31), 100.0, 0.10)])
+
+    plan = add_unemployment(raised, date(2029, 1, 1), 12)  # the third year is lost
+
+    assert plan.phases[-1].start == date(2030, 1, 1)
+    assert plan.phases[-1].monthly_amount == pytest.approx(133.1)  # 100 x 1.1 ^ 3
+
+
+def test_child_lowers_the_deposits_for_some_years():
+    plan = add_child(simple_plan(), date(2030, 6, 20), 100.0, 3)
+
+    assert phase_summary(plan) == [
+        ("Job", date(2027, 1, 1), date(2030, 5, 31), 300.0),
+        ("Job (child)", date(2030, 6, 1), date(2033, 5, 31), 200.0),
+        ("Job", date(2033, 6, 1), date(2036, 12, 31), 300.0),
+    ]
+    assert validate_plan(plan) == []
+
+
+def test_a_decrease_never_makes_a_deposit_negative_and_spans_several_phases():
+    two = plan_with(
+        [
+            Phase("Small", date(2027, 1, 1), date(2028, 12, 31), 50.0),
+            Phase("Big", date(2029, 1, 1), date(2030, 12, 31), 400.0),
+        ],
+        end=date(2030, 12, 31),
+    )
+
+    plan = add_child(two, date(2028, 7, 1), 100.0, 1)  # July 2028 to June 2029
+
+    assert phase_summary(plan) == [
+        ("Small", date(2027, 1, 1), date(2028, 6, 30), 50.0),
+        ("Small (child)", date(2028, 7, 1), date(2028, 12, 31), 0.0),
+        ("Big (child)", date(2029, 1, 1), date(2029, 6, 30), 300.0),
+        ("Big", date(2029, 7, 1), date(2030, 12, 31), 400.0),
+    ]
+    assert validate_plan(plan) == []
+
+
+def test_home_purchase_withdraws_the_down_payment_and_lowers_the_deposits():
+    plan = add_home_purchase(simple_plan(), date(2032, 3, 15), 20_000.0, 150.0, 20)
+
+    assert plan.one_offs == [OneOff("Home down payment", date(2032, 3, 15), -20_000.0)]
+    assert phase_summary(plan) == [
+        ("Job", date(2027, 1, 1), date(2032, 2, 29), 300.0),
+        ("Job (home loan)", date(2032, 3, 1), date(2036, 12, 31), 150.0),  # to the phase end
+    ]
+    assert validate_plan(plan) == []
+
+
+def test_big_purchase_and_windfall_add_one_off_events():
+    plan = add_windfall(
+        add_big_purchase(simple_plan(), date(2030, 5, 2), 8000.0), date(2031, 1, 9), 2500
+    )
+
+    assert [(o.label, o.amount) for o in plan.one_offs] == [
+        ("Big purchase", -8000.0),
+        ("Windfall", 2500),
+    ]
+    assert phase_summary(plan) == phase_summary(simple_plan())
+
+
+def test_helpers_leave_the_original_plan_untouched():
+    original = simple_plan()
+
+    changed = add_child(add_windfall(original, date(2030, 1, 1), 100.0), date(2030, 1, 1), 50.0, 1)
+    changed.phases[0].monthly_amount = 999.0
+
+    assert original == simple_plan()
+
+
+def test_a_plan_survives_the_editable_tables():
+    plan = full_plan()
+
+    phases, one_offs = plan_to_frames(plan)
+    rebuilt, skipped = plan_from_frames(plan.name, plan.end, phases, one_offs)
+
+    assert rebuilt == plan
+    assert skipped == 0
+    assert phases["increase_pct"].tolist() == pytest.approx([2.0])  # shown as a percentage
+
+
+def test_rows_being_typed_are_left_out_and_counted():
+    phases, one_offs = plan_to_frames(full_plan())
+    phases.loc[1] = ["Half typed", pd.Timestamp("2030-01-01"), pd.NaT, 100.0, None]
+    phases.loc[2] = [None, pd.Timestamp("2031-01-01"), pd.Timestamp("2031-12-31"), 50.0, None]
+    one_offs.loc[1] = ["No amount", pd.Timestamp("2030-01-01"), None]
+
+    plan, skipped = plan_from_frames(" Mine ", date(2040, 12, 31), phases, one_offs)
+
+    assert skipped == 2
+    assert plan.name == "Mine"
+    assert [(p.label, p.annual_increase) for p in plan.phases] == [("Job", 0.02), ("", 0.0)]
+    assert len(plan.one_offs) == 1
+
+
+def test_an_empty_plan_gives_empty_tables_with_the_right_columns():
+    phases, one_offs = plan_to_frames(plan_with())
+
+    assert list(phases.columns) == ["label", "start", "end", "monthly_amount", "increase_pct"]
+    assert list(one_offs.columns) == ["label", "date", "amount"]
+    assert plan_from_frames("Empty", date(2040, 1, 1), phases, one_offs)[0].phases == []

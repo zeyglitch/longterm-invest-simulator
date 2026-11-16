@@ -12,10 +12,11 @@ from simulator.database import (
     get_asset_by_isin,
     get_connection,
     init_db,
+    save_plan,
     save_prices,
     set_setting,
 )
-from simulator.models import Asset, CashMovement, Transaction
+from simulator.models import Asset, CashMovement, OneOff, Phase, Plan, Transaction
 
 SAMPLE_DIR = config.ROOT_DIR / "sample_data"
 DEMO_PEA_OPEN_DATE = "2024-11-04"
@@ -68,6 +69,7 @@ def build_demo_db(path: str = ":memory:") -> sqlite3.Connection:
     _load_frozen_prices(conn)
     # fictional opening date, a bit before the first fictional trade
     set_setting(conn, "pea_open_date", DEMO_PEA_OPEN_DATE)
+    save_plan(conn, demo_plan())
     return conn
 
 
@@ -79,3 +81,20 @@ def _load_frozen_prices(conn: sqlite3.Connection) -> None:
     for isin, by_day in closes.items():
         prices = pd.Series(list(by_day.values()), index=pd.to_datetime(list(by_day)))
         save_prices(conn, get_asset_by_isin(conn, isin).id, prices, "yahoo")
+
+
+def demo_plan() -> Plan:
+    """An invented plan of future deposits, to show the simulation pages with something in."""
+    return Plan(
+        name="Example plan",
+        end=date(2056, 12, 31),
+        phases=[
+            Phase("Student job", date(2027, 1, 1), date(2029, 6, 30), 80.0),
+            Phase("First job", date(2029, 7, 1), date(2034, 12, 31), 250.0, 0.02),
+            Phase("Later career", date(2035, 1, 1), date(2056, 12, 31), 450.0),
+        ],
+        one_offs=[
+            OneOff("Bonus", date(2030, 3, 15), 2000.0),
+            OneOff("Car", date(2033, 5, 10), -8000.0),
+        ],
+    )

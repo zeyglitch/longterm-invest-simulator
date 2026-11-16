@@ -5,10 +5,13 @@ from simulator.database import (
     get_last_price,
     list_assets,
     list_cash_movements,
+    list_plan_names,
     list_transactions,
+    load_plan,
     load_tax_settings,
 )
 from simulator.demo import SAMPLE_DIR, build_demo_db
+from simulator.plan import validate_plan
 
 
 def count_csv_rows(filename: str) -> int:
@@ -53,3 +56,10 @@ def test_demo_has_a_fictional_pea_opening_date():
     conn = build_demo_db()
 
     assert load_tax_settings(conn).pea_open_date == date(2024, 11, 4)
+
+
+def test_demo_has_a_valid_example_plan():
+    conn = build_demo_db()
+
+    assert list_plan_names(conn) == ["Example plan"]
+    assert validate_plan(load_plan(conn, "Example plan")) == []

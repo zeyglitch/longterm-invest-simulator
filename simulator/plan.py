@@ -1,7 +1,7 @@
 """A plan of future deposits turned into one flow per month. See 03-finance-rules, section 2.3."""
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date
 
 import pandas as pd
@@ -11,6 +11,13 @@ from simulator.models import OneOff, Phase, Plan
 
 def _month(day: date) -> pd.Period:
     return pd.Period(day, freq="M")
+
+
+def _amount_in(phase: Phase, month: pd.Period) -> float:
+    """Monthly amount of a phase in a given month, with its yearly raises."""
+    # the raise comes at each anniversary of the phase, not on 1 January
+    years_in_phase = (month - _month(phase.start)).n // 12
+    return phase.monthly_amount * (1 + phase.annual_increase) ** years_in_phase
 
 
 def build_flows(
@@ -30,9 +37,7 @@ def build_flows(
         for number, month in enumerate(months):
             if not first <= month <= last:
                 continue
-            # the raise comes at each anniversary of the phase, not on 1 January
-            years_in_phase = (month - first).n // 12
-            amount = phase.monthly_amount * (1 + phase.annual_increase) ** years_in_phase
+            amount = _amount_in(phase, month)
             if index_on_inflation:
                 amount *= (1 + inflation) ** (number // 12)
             flows[month] += amount
@@ -95,3 +100,180 @@ def plan_from_json(text: str) -> Plan:
     return Plan(
         name=data["name"], end=date.fromisoformat(data["end"]), phases=phases, one_offs=one_offs
     )
+
+
+def plan_to_frames(plan: Plan) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The phases and the one-offs as two tables, for the editable tables of the Plan page.
+
+    The yearly increase is shown as a percentage (2 for 2 %).
+    """
+    phases = pd.DataFrame(
+        {
+            "label": pd.Series([p.label for p in plan.phases], dtype="object"),
+            "start": pd.to_datetime([p.start for p in plan.phases]),
+            "end": pd.to_datetime([p.end for p in plan.phases]),
+            "monthly_amount": pd.Series([p.monthly_amount for p in plan.phases], dtype="float"),
+            "increase_pct": pd.Series(
+                [p.annual_increase * 100 for p in plan.phases], dtype="float"
+            ),
+        }
+    )
+    one_offs = pd.DataFrame(
+        {
+            "label": pd.Series([o.label for o in plan.one_offs], dtype="object"),
+            "date": pd.to_datetime([o.date for o in plan.one_offs]),
+            "amount": pd.Series([o.amount for o in plan.one_offs], dtype="float"),
+        }
+    )
+    return phases, one_offs
+
+
+def plan_from_frames(
+    name: str, end: date, phases: pd.DataFrame, one_offs: pd.DataFrame
+) -> tuple[Plan, int]:
+    """Build a plan from the two edited tables. Also returns the number of rows left out
+    because a date or an amount is still missing (a row being typed)."""
+    skipped = 0
+    plan = Plan(name=name.strip(), end=end, phases=[], one_offs=[])
+    for row in phases.to_dict("records"):
+        if pd.isna(row["start"]) or pd.isna(row["end"]) or pd.isna(row["monthly_amount"]):
+            skipped += 1
+            continue
+        increase = 0.0 if pd.isna(row["increase_pct"]) else row["increase_pct"] / 100
+        plan.phases.append(
+            Phase(
+                label="" if pd.isna(row["label"]) else str(row["label"]).strip(),
+                start=pd.Timestamp(row["start"]).date(),
+                end=pd.Timestamp(row["end"]).date(),
+                monthly_amount=float(row["monthly_amount"]),
+                annual_increase=round(float(increase), 6),
+            )
+        )
+    for row in one_offs.to_dict("records"):
+        if pd.isna(row["date"]) or pd.isna(row["amount"]):
+            skipped += 1
+            continue
+        plan.one_offs.append(
+            OneOff(
+                label="" if pd.isna(row["label"]) else str(row["label"]).strip(),
+                date=pd.Timestamp(row["date"]).date(),
+                amount=float(row["amount"]),
+            )
+        )
+    return plan, skipped
+
+
+# Life event helpers. Each one returns a new plan and leaves the given plan untouched.
+# They only write phases and one-offs: the user can then edit them like any other line.
+
+
+def _first_day(month: pd.Period) -> date:
+    return month.start_time.date()
+
+
+def _last_day(month: pd.Period) -> date:
+    return month.end_time.date()
+
+
+def _months_from(day: date, months: int) -> tuple[pd.Period, pd.Period]:
+    """First and last month of a period of `months` months starting in the month of `day`."""
+    first = _month(day)
+    return first, first + max(months, 1) - 1
+
+
+def _without_months(phases: list[Phase], first: pd.Period, last: pd.Period) -> list[Phase]:
+    """The phases with the months `first` to `last` cut out. A phase that spans the window is
+    split in two; the part after the window restarts at the amount it had reached."""
+    kept = []
+    for phase in phases:
+        start, end = _month(phase.start), _month(phase.end)
+        if end < first or start > last:
+            kept.append(replace(phase))
+            continue
+        if start < first:
+            kept.append(replace(phase, end=_last_day(first - 1)))
+        if end > last:
+            resumed = last + 1
+            kept.append(
+                replace(phase, start=_first_day(resumed), monthly_amount=_amount_in(phase, resumed))
+            )
+    return kept
+
+
+def _sorted(phases: list[Phase]) -> list[Phase]:
+    return sorted(phases, key=lambda phase: phase.start)
+
+
+def _reduced(plan: Plan, day: date, months: int, decrease: float, reason: str) -> list[Phase]:
+    """The phases with `decrease` euros less per month during `months` months (never below 0)."""
+    first, last = _months_from(day, months)
+    phases = _without_months(plan.phases, first, last)
+    for phase in plan.phases:
+        start, end = max(_month(phase.start), first), min(_month(phase.end), last)
+        if start > end:
+            continue
+        phases.append(
+            replace(
+                phase,
+                label=f"{phase.label} ({reason})".strip(),
+                start=_first_day(start),
+                end=_last_day(end),
+                monthly_amount=max(0.0, _amount_in(phase, start) - decrease),
+            )
+        )
+    return _sorted(phases)
+
+
+def add_job_change(plan: Plan, day: date, new_monthly_amount: float) -> Plan:
+    """New job or raise: the phase in progress ends, a new one starts in the month of `day`.
+
+    The new phase runs to the end of the phase it replaces. If no phase covers that month, it
+    runs to the next phase, or to the end of the plan.
+    """
+    first = _month(day)
+    current = [p for p in plan.phases if _month(p.start) <= first <= _month(p.end)]
+    later = [_month(p.start) for p in plan.phases if _month(p.start) > first]
+    if current:
+        last = _month(current[0].end)
+    elif later:
+        last = min(later) - 1
+    else:
+        last = max(_month(plan.end), first)
+    phases = _without_months(plan.phases, first, last)
+    phases.append(Phase("New job", _first_day(first), _last_day(last), new_monthly_amount))
+    return replace(plan, phases=_sorted(phases), one_offs=list(plan.one_offs))
+
+
+def add_unemployment(plan: Plan, start: date, months: int) -> Plan:
+    """A pause: nothing is deposited during `months` months, then the phases resume."""
+    first, last = _months_from(start, months)
+    phases = _without_months(plan.phases, first, last)
+    phases.append(Phase("Unemployment", _first_day(first), _last_day(last), 0.0))
+    return replace(plan, phases=_sorted(phases), one_offs=list(plan.one_offs))
+
+
+def add_child(plan: Plan, day: date, monthly_decrease: float, years: int) -> Plan:
+    """A child: the monthly deposits are lowered by `monthly_decrease` during `years` years."""
+    phases = _reduced(plan, day, years * 12, monthly_decrease, "child")
+    return replace(plan, phases=phases, one_offs=list(plan.one_offs))
+
+
+def add_home_purchase(
+    plan: Plan, day: date, down_payment: float, monthly_decrease: float, loan_years: int
+) -> Plan:
+    """A home: the down payment is withdrawn, then deposits are lowered while the loan runs."""
+    phases = _reduced(plan, day, loan_years * 12, monthly_decrease, "home loan")
+    one_offs = [*plan.one_offs, OneOff("Home down payment", day, -abs(down_payment))]
+    return replace(plan, phases=phases, one_offs=one_offs)
+
+
+def add_big_purchase(plan: Plan, day: date, amount: float, label: str = "Big purchase") -> Plan:
+    """A car or another large expense: one withdrawal."""
+    one_offs = [*plan.one_offs, OneOff(label, day, -abs(amount))]
+    return replace(plan, phases=[replace(p) for p in plan.phases], one_offs=one_offs)
+
+
+def add_windfall(plan: Plan, day: date, amount: float, label: str = "Windfall") -> Plan:
+    """A bonus or a gift: one extra deposit."""
+    one_offs = [*plan.one_offs, OneOff(label, day, abs(amount))]
+    return replace(plan, phases=[replace(p) for p in plan.phases], one_offs=one_offs)

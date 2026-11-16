@@ -1,6 +1,10 @@
 import sqlite3
+from datetime import date
 
 import streamlit as st
+
+from simulator.database import list_plan_names, load_plan
+from simulator.models import Plan
 
 
 def format_eur(amount: float | None) -> str:
@@ -47,3 +51,27 @@ def show_flash() -> None:
     message = st.session_state.pop("flash", None)
     if message:
         st.success(message)
+
+
+DEFAULT_HORIZON_YEARS = 30
+
+
+def data_mode() -> str:
+    """`demo` or `real`: session values that depend on the database are stored once per mode."""
+    return "demo" if st.session_state["demo"] else "real"
+
+
+def get_plan() -> Plan:
+    """The plan in use, shared by the simulation pages.
+
+    The first time, it is the first saved plan, or an empty 30-year plan if none is saved.
+    """
+    key = f"plan_{data_mode()}"
+    if key not in st.session_state:
+        names = list_plan_names(get_conn())
+        if names:
+            st.session_state[key] = load_plan(get_conn(), names[0])
+        else:
+            end = date(date.today().year + DEFAULT_HORIZON_YEARS, 12, 31)
+            st.session_state[key] = Plan(name="My plan", end=end, phases=[], one_offs=[])
+    return st.session_state[key]
