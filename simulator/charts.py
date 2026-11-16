@@ -10,6 +10,9 @@ VALUE_COLOR = PALETTE[0]
 INVESTED_COLOR = "#8a94a6"
 DEPOSIT_COLOR = PALETTE[2]
 WITHDRAWAL_COLOR = PALETTE[4]
+# one colour per scenario, in the order pessimistic, central, optimistic
+SCENARIO_COLORS = [PALETTE[1], PALETTE[0], PALETTE[2]]
+LIVRET_COLOR = PALETTE[3]
 
 TRANSPARENT = "rgba(0,0,0,0)"
 
@@ -135,6 +138,77 @@ def contributions_chart(flows: pd.Series, one_offs: pd.DataFrame) -> go.Figure:
                 marker={"color": colour, "size": 13, "symbol": symbol},
                 customdata=rows[["label", "amount"]],
                 hovertemplate="%{customdata[0]}: %{customdata[1]:,.2f} €<extra></extra>",
+            )
+        )
+    return figure
+
+
+def projection_chart(
+    curves: pd.DataFrame, scenarios: list[str], target: float | None = None
+) -> go.Figure:
+    """Value over time for each scenario, with the cumulated deposits and an optional Livret A.
+
+    `curves` has a `date` column, one column per scenario name, a `Contributions` column and,
+    if wanted, a `Livret A` column. `target` draws a horizontal line.
+    """
+    figure = _base_figure(
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.1, "x": 0},
+        yaxis={"ticksuffix": " €", "tickformat": ",.0f"},
+    )
+    for number, name in enumerate(scenarios):
+        colour = SCENARIO_COLORS[number % len(SCENARIO_COLORS)]
+        figure.add_trace(
+            go.Scatter(
+                x=curves["date"],
+                y=curves[name],
+                name=name,
+                line={"color": colour, "width": 2},
+                hovertemplate="%{y:,.0f} €",
+            )
+        )
+    extras = [("Contributions", INVESTED_COLOR, "dash"), ("Livret A", LIVRET_COLOR, "dot")]
+    for name, colour, dash in extras:
+        if name not in curves:
+            continue
+        figure.add_trace(
+            go.Scatter(
+                x=curves["date"],
+                y=curves[name],
+                name=name,
+                line={"color": colour, "width": 2, "dash": dash},
+                hovertemplate="%{y:,.0f} €",
+            )
+        )
+    if target:
+        figure.add_hline(
+            y=target,
+            line={"color": INVESTED_COLOR, "width": 1, "dash": "dot"},
+            annotation_text="Target",
+            annotation_position="top left",
+        )
+    return figure
+
+
+def gains_chart(table: pd.DataFrame) -> go.Figure:
+    """Deposits and gains in the final value of each scenario, as stacked bars.
+
+    `table` has the columns `scenario`, `contributions` and `gains`.
+    """
+    figure = _base_figure(
+        barmode="stack",
+        legend={"orientation": "h", "y": 1.15, "x": 0},
+        yaxis={"ticksuffix": " €", "tickformat": ",.0f"},
+    )
+    parts = [("Deposits", "contributions", INVESTED_COLOR), ("Gains", "gains", DEPOSIT_COLOR)]
+    for name, column, colour in parts:
+        figure.add_trace(
+            go.Bar(
+                x=table["scenario"],
+                y=table[column],
+                name=name,
+                marker={"color": colour},
+                hovertemplate=name + ": %{y:,.0f} €<extra></extra>",
             )
         )
     return figure

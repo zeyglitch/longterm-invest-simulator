@@ -258,6 +258,20 @@ def asset_errors(asset: Asset, other_assets: list[Asset] = ()) -> list[str]:
     return errors
 
 
+def weighted_fees(assets: list[Asset]) -> float:
+    """Average yearly fees of the assets, weighted by their target weights.
+
+    Assets without a target weight are left out; if none has one, it is the plain average.
+    """
+    targeted = [asset for asset in assets if asset.target_weight]
+    if targeted:
+        total_weight = sum(asset.target_weight for asset in targeted)
+        return sum(asset.fees * asset.target_weight for asset in targeted) / total_weight
+    if assets:
+        return sum(asset.fees for asset in assets) / len(assets)
+    return 0.0
+
+
 def target_weights_total(assets: list[Asset]) -> float | None:
     """Sum of the target weights that are set, or None if no asset has one."""
     weights = [asset.target_weight for asset in assets if asset.target_weight is not None]

@@ -5,7 +5,8 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from simulator.taxes import withdrawal_tax
+from simulator.models import TaxSettings
+from simulator.taxes import PEA, pea_five_year_date, withdrawal_tax
 
 
 def net_return(gross: float, fees: float) -> float:
@@ -147,3 +148,39 @@ def date_target_reached(projection: pd.DataFrame, target: float) -> date | None:
     if reached.empty or pd.isna(reached["date"].iloc[0]):
         return None
     return reached["date"].iloc[0].date()
+
+
+def add_net_value(
+    projection: pd.DataFrame, envelope: str, open_date: date | None, settings: TaxSettings
+) -> pd.DataFrame:
+    """Add `tax` and `net_value`: the tax due, and what would be left, if everything were
+    withdrawn in that month.
+
+    PEA: social charges only from its fifth birthday, the flat tax before (and when the opening
+    date is unknown). What sits in a CTO, including the surplus above the PEA ceiling, always
+    bears the flat tax. A pocket in loss owes nothing.
+    """
+    table = projection.copy()
+    flat_tax = settings.ir_rate + settings.ps_rate
+    pea_rate = flat_tax
+    if envelope == PEA and open_date is not None:
+        five_years = pd.Timestamp(pea_five_year_date(open_date))
+        pea_rate = np.where(table["date"] >= five_years, settings.ps_rate, flat_tax)
+
+    if "value_pea" in table:
+        pea_gain = (table["value_pea"] - table["contributions_pea"]).clip(lower=0)
+        cto_gain = (table["value_cto"] - table["contributions_cto"]).clip(lower=0)
+    else:
+        pea_gain = table["gains"].clip(lower=0)
+        cto_gain = 0.0
+    table["tax"] = pea_gain * pea_rate + cto_gain * flat_tax
+    table["net_value"] = table["value"] - table["tax"]
+    return table
+
+
+def yearly_table(projection: pd.DataFrame) -> pd.DataFrame:
+    """One row per calendar year: the last month of each year, with a `year` column first."""
+    dated = projection.dropna(subset=["date"])
+    last_of_year = dated.groupby(dated["date"].dt.year).tail(1).copy()
+    last_of_year.insert(0, "year", last_of_year["date"].dt.year)
+    return last_of_year.reset_index(drop=True)

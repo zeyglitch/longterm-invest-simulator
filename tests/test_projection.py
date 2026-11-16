@@ -3,7 +3,9 @@ from datetime import date
 import pandas as pd
 import pytest
 
+from simulator.models import TaxSettings
 from simulator.projection import (
+    add_net_value,
     date_target_reached,
     fees_cost,
     monthly_rate,
@@ -12,6 +14,7 @@ from simulator.projection import (
     project_livret,
     project_with_ceiling,
     to_real,
+    yearly_table,
 )
 
 CENT = 0.01
@@ -191,3 +194,58 @@ def test_the_start_row_is_dated_one_month_before_the_first_flow():
     projection = project(0, 0, monthly_flows([100.0]), 0.06)
 
     assert projection["date"].iloc[0].date() == date(2026, 12, 31)
+
+
+TAX = TaxSettings(ps_rate=0.186, ir_rate=0.128, pea_ceiling=150_000, pea_open_date=None)
+
+
+def test_net_value_of_a_pea_changes_rate_on_its_fifth_birthday():
+    # opened on 15/02/2022: the months up to January 2027 bear 31.4 %, the next ones 18.6 %
+    projection = project(1000, 600, monthly_flows([0.0, 0.0]), 0.0)  # gain of 400 throughout
+
+    table = add_net_value(projection, "PEA", date(2022, 2, 15), TAX)
+
+    assert table["tax"].tolist() == pytest.approx([125.6, 125.6, 74.4])  # Dec, Jan, Feb
+    assert table["net_value"].iloc[-1] == pytest.approx(925.6)
+
+
+def test_pea_without_opening_date_and_cto_bear_the_flat_tax():
+    projection = project(1000, 600, monthly_flows([0.0]), 0.0)
+
+    unknown = add_net_value(projection, "PEA", None, TAX)
+    cto = add_net_value(projection, "CTO", date(2010, 1, 1), TAX)
+
+    assert unknown["tax"].iloc[-1] == pytest.approx(125.6)
+    assert cto["tax"].iloc[-1] == pytest.approx(125.6)
+
+
+def test_the_surplus_above_the_ceiling_is_taxed_like_a_cto():
+    # 1 000 on an old PEA (gain 400), then 500 above the ceiling that double in a CTO
+    projection = project_with_ceiling(1000, 600, monthly_flows([500.0, 0.0]), 0.0, 600, 600)
+    projection.loc[2, "value_cto"] = 1000.0
+    projection.loc[2, "value"] = 2000.0
+
+    table = add_net_value(projection, "PEA", date(2010, 1, 1), TAX)
+
+    # PEA: 400 x 18.6 % = 74.40 ; CTO: 500 x 31.4 % = 157.00
+    assert table["tax"].iloc[-1] == pytest.approx(231.4)
+    assert table["net_value"].iloc[-1] == pytest.approx(1768.6)
+
+
+def test_no_tax_on_a_loss():
+    projection = project(800, 1000, monthly_flows([0.0]), 0.0)
+
+    table = add_net_value(projection, "CTO", None, TAX)
+
+    assert table["tax"].tolist() == [0.0, 0.0]
+    assert table["net_value"].tolist() == [800.0, 800.0]
+
+
+def test_yearly_table_keeps_the_last_month_of_each_year():
+    projection = project(0, 0, monthly_flows([100.0] * 30), 0.0)  # January 2027 to June 2029
+
+    table = yearly_table(projection)
+
+    assert table["year"].tolist() == [2026, 2027, 2028, 2029]
+    assert table["contributions"].tolist() == [0, 1200, 2400, 3000]
+    assert table["date"].iloc[-1] == pd.Timestamp("2029-06-30")

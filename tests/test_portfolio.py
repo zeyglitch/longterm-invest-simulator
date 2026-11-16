@@ -17,6 +17,7 @@ from simulator.portfolio import (
     target_weights_total,
     total_deposits,
     trade_errors,
+    weighted_fees,
 )
 
 ASSET_A = Asset(id=1, isin="XX0000000001", name="Asset A", ticker=None)
@@ -385,3 +386,14 @@ def test_two_assets_cannot_have_the_same_name():
 
     assert asset_errors(new, [ASSET_A, ASSET_B]) == ["Another asset is already called asset a."]
     assert asset_errors(new, [ASSET_B]) == []
+
+
+def test_fees_are_weighted_by_the_target_weights():
+    world = Asset(1, "XX0000000001", "World", None, fees=0.002, target_weight=0.75)
+    emerging = Asset(2, "XX0000000002", "Emerging", None, fees=0.003, target_weight=0.25)
+    outside = Asset(3, "XX0000000003", "Outside the plan", None, fees=0.01)
+
+    assert weighted_fees([world, emerging, outside]) == pytest.approx(0.00225)
+    assert weighted_fees([outside, world]) == pytest.approx(0.002)  # only the targeted one
+    assert weighted_fees([outside]) == pytest.approx(0.01)  # no target: plain average
+    assert weighted_fees([]) == 0.0
