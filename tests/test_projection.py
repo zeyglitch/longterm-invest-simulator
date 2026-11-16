@@ -249,3 +249,50 @@ def test_yearly_table_keeps_the_last_month_of_each_year():
     assert table["year"].tolist() == [2026, 2027, 2028, 2029]
     assert table["contributions"].tolist() == [0, 1200, 2400, 3000]
     assert table["date"].iloc[-1] == pd.Timestamp("2029-06-30")
+
+
+def flow_parts(deposits: list[float], withdrawals: list[float]) -> pd.DataFrame:
+    days = pd.date_range("2027-01-31", periods=len(deposits), freq="ME")
+    return pd.DataFrame({"deposit": deposits, "withdrawal": withdrawals}, index=days)
+
+
+def test_the_ceiling_counts_deposits_before_the_withdrawal_of_the_same_month():
+    # 900 deposited in all under a ceiling of 800: the withdrawal of 100 gives no room back
+    parts = flow_parts([300.0, 300.0, 300.0], [0.0, 100.0, 0.0])
+
+    projection = project_with_ceiling(0, 0, parts, 0.0, ceiling=800, already_deposited=0)
+
+    assert final(projection, "contributions_pea") + 100 == pytest.approx(800)  # 800 in, 100 out
+    assert final(projection, "value_cto") == pytest.approx(100)
+    assert projection["flow"].tolist() == [0.0, 300.0, 200.0, 300.0]
+
+
+def test_a_net_flow_and_its_two_parts_give_the_same_value():
+    parts = flow_parts([300.0, 300.0, 300.0], [0.0, 100.0, 0.0])
+    net = parts["deposit"] - parts["withdrawal"]
+
+    assert final(project(1000, 1000, parts, 0.06)) == pytest.approx(
+        final(project(1000, 1000, net, 0.06))
+    )
+
+
+def test_a_withdrawal_takes_gain_in_proportion_in_each_pocket():
+    # PEA: 1 000 for 600 deposited (gain 40 %); the surplus of 400 goes to a CTO without gain
+    parts = flow_parts([400.0, 0.0], [0.0, 700.0])
+
+    projection = project_with_ceiling(1000, 600, parts, 0.0, ceiling=600, already_deposited=600)
+
+    # the CTO is emptied first (400, all capital), then 300 leave the PEA: 180 of capital
+    assert final(projection, "value_cto") == 0
+    assert final(projection, "contributions_cto") == pytest.approx(0)
+    assert final(projection, "value_pea") == pytest.approx(700)
+    assert final(projection, "contributions_pea") == pytest.approx(420)
+
+
+def test_livret_accepts_a_deposit_up_to_the_ceiling_then_lets_the_withdrawal_out():
+    parts = flow_parts([500.0], [200.0])
+
+    projection = project_livret(1000, parts, 0.0, ceiling=1300)
+
+    assert final(projection) == pytest.approx(1100)  # 300 accepted, 200 refused, 200 out
+    assert final(projection, "not_invested") == pytest.approx(200)

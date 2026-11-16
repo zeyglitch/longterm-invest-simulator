@@ -20,17 +20,21 @@ def _amount_in(phase: Phase, month: pd.Period) -> float:
     return phase.monthly_amount * (1 + phase.annual_increase) ** years_in_phase
 
 
-def build_flows(
+def build_flow_parts(
     plan: Plan, start: date, inflation: float = 0.0, index_on_inflation: bool = False
-) -> pd.Series:
-    """One flow per month, from the month after `start` to the month of `plan.end` included.
+) -> pd.DataFrame:
+    """Deposits and withdrawals of each month, from the month after `start` to the month of
+    `plan.end` included, as two columns `deposit` and `withdrawal` (both positive or zero).
 
     The index holds the month ends. A phase applies from the month of its start to the month of
-    its end; a month without phase is worth 0. A one-off is added to the month of its date.
-    With `index_on_inflation`, the phase amounts follow inflation, by yearly steps.
+    its end; a month without phase is worth 0. A one-off goes to the month of its date: to
+    `deposit` if positive, to `withdrawal` if negative. With `index_on_inflation`, the phase
+    amounts follow inflation, by yearly steps. The two are kept apart because several rules look
+    at one only: the PEA ceiling counts deposits, unemployment stops deposits, not withdrawals.
     """
     months = pd.period_range(_month(start) + 1, _month(plan.end), freq="M")
-    flows = pd.Series(0.0, index=months)
+    deposits = pd.Series(0.0, index=months)
+    withdrawals = pd.Series(0.0, index=months)
 
     for phase in plan.phases:
         first, last = _month(phase.start), _month(phase.end)
@@ -40,15 +44,28 @@ def build_flows(
             amount = _amount_in(phase, month)
             if index_on_inflation:
                 amount *= (1 + inflation) ** (number // 12)
-            flows[month] += amount
+            deposits[month] += amount
 
     for one_off in plan.one_offs:
         month = _month(one_off.date)
-        if month in flows.index:
-            flows[month] += one_off.amount
+        if month not in months:
+            continue
+        if one_off.amount >= 0:
+            deposits[month] += one_off.amount
+        else:
+            withdrawals[month] -= one_off.amount
 
-    flows.index = months.to_timestamp(how="end").normalize()
-    return flows
+    parts = pd.DataFrame({"deposit": deposits, "withdrawal": withdrawals})
+    parts.index = months.to_timestamp(how="end").normalize()
+    return parts
+
+
+def build_flows(
+    plan: Plan, start: date, inflation: float = 0.0, index_on_inflation: bool = False
+) -> pd.Series:
+    """One net flow per month: deposits minus withdrawals (see `build_flow_parts`)."""
+    parts = build_flow_parts(plan, start, inflation, index_on_inflation)
+    return parts["deposit"] - parts["withdrawal"]
 
 
 def validate_plan(plan: Plan) -> list[str]:
@@ -181,9 +198,37 @@ def _months_from(day: date, months: int) -> tuple[pd.Period, pd.Period]:
     return first, first + max(months, 1) - 1
 
 
+def _next_anniversary(phase: Phase, month: pd.Period) -> pd.Period:
+    """First month, from `month` on, in which the phase gets its yearly raise."""
+    months_in_phase = (month - _month(phase.start)).n
+    return month + (-months_in_phase % 12)
+
+
+def _fixed_pieces(
+    phase: Phase, first: pd.Period, last: pd.Period, label: str, decrease: float = 0.0
+) -> list[Phase]:
+    """The months `first` to `last` of a phase, as phases without raise, `decrease` euros lower.
+
+    A phase with a yearly raise is cut at each of its anniversaries, so that every piece has the
+    amount the phase had that year. Without raise, one piece is enough.
+    """
+    pieces = []
+    month = first
+    while month <= last:
+        end = last
+        if phase.annual_increase != 0:
+            end = min(_next_anniversary(phase, month + 1) - 1, last)
+        amount = max(0.0, _amount_in(phase, month) - decrease)
+        pieces.append(Phase(label, _first_day(month), _last_day(end), amount))
+        month = end + 1
+    return pieces
+
+
 def _without_months(phases: list[Phase], first: pd.Period, last: pd.Period) -> list[Phase]:
     """The phases with the months `first` to `last` cut out. A phase that spans the window is
-    split in two; the part after the window restarts at the amount it had reached."""
+    split in two. The part after the window keeps the amounts and the raise dates the phase
+    would have had: if it does not resume on an anniversary, a first piece without raise runs
+    to the next anniversary."""
     kept = []
     for phase in phases:
         start, end = _month(phase.start), _month(phase.end)
@@ -194,9 +239,20 @@ def _without_months(phases: list[Phase], first: pd.Period, last: pd.Period) -> l
             kept.append(replace(phase, end=_last_day(first - 1)))
         if end > last:
             resumed = last + 1
-            kept.append(
-                replace(phase, start=_first_day(resumed), monthly_amount=_amount_in(phase, resumed))
+            anniversary = (
+                resumed if phase.annual_increase == 0 else _next_anniversary(phase, resumed)
             )
+            if anniversary > resumed:
+                before = min(anniversary - 1, end)
+                kept.extend(_fixed_pieces(phase, resumed, before, phase.label))
+            if anniversary <= end:
+                kept.append(
+                    replace(
+                        phase,
+                        start=_first_day(anniversary),
+                        monthly_amount=_amount_in(phase, anniversary),
+                    )
+                )
     return kept
 
 
@@ -212,15 +268,8 @@ def _reduced(plan: Plan, day: date, months: int, decrease: float, reason: str) -
         start, end = max(_month(phase.start), first), min(_month(phase.end), last)
         if start > end:
             continue
-        phases.append(
-            replace(
-                phase,
-                label=f"{phase.label} ({reason})".strip(),
-                start=_first_day(start),
-                end=_last_day(end),
-                monthly_amount=max(0.0, _amount_in(phase, start) - decrease),
-            )
-        )
+        label = f"{phase.label} ({reason})".strip()
+        phases.extend(_fixed_pieces(phase, start, end, label, decrease))
     return _sorted(phases)
 
 

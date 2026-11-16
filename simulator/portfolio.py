@@ -183,6 +183,16 @@ def gross_deposits(cash_movements: list[CashMovement]) -> float:
     return sum(m.amount for m in cash_movements if m.kind == "DEPOSIT")
 
 
+def cash_balance(transactions: list[Transaction], cash_movements: list[CashMovement]) -> float:
+    """Money on the account that is not invested: deposits and sales, minus withdrawals and
+    purchases (order fees included). Negative if purchases were entered without their deposit."""
+    balance = total_deposits(cash_movements)
+    for tx in transactions:
+        amount = tx.quantity * tx.unit_price
+        balance += amount - tx.fees if tx.kind == "SELL" else -(amount + tx.fees)
+    return balance
+
+
 def pea_capacity(cash_movements: list[CashMovement], ceiling: float) -> float:
     """Euros that can still be deposited under the ceiling; negative if it is exceeded."""
     return ceiling - gross_deposits(cash_movements)

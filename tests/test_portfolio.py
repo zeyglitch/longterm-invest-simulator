@@ -6,6 +6,7 @@ import pytest
 from simulator.models import Asset, CashMovement, Transaction
 from simulator.portfolio import (
     asset_errors,
+    cash_balance,
     compute_positions,
     first_oversold_sale,
     gross_deposits,
@@ -397,3 +398,15 @@ def test_fees_are_weighted_by_the_target_weights():
     assert weighted_fees([outside, world]) == pytest.approx(0.002)  # only the targeted one
     assert weighted_fees([outside]) == pytest.approx(0.01)  # no target: plain average
     assert weighted_fees([]) == 0.0
+
+
+def test_cash_balance_is_what_was_deposited_and_not_invested():
+    movements = [
+        CashMovement(None, date(2026, 1, 5), "DEPOSIT", 1000.0),
+        CashMovement(None, date(2026, 3, 5), "WITHDRAWAL", 100.0),
+    ]
+    trades = [trade(5, 1, "BUY", 100, 5.0, 1.0), trade(12, 1, "SELL", 20, 6.0, 1.0)]
+
+    # 1 000 - 100 - (500 + 1) + (120 - 1)
+    assert cash_balance(trades, movements) == pytest.approx(518.0)
+    assert cash_balance(trades, []) == pytest.approx(-382.0)  # purchases without their deposit

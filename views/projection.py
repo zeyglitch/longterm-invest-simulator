@@ -6,17 +6,12 @@ import streamlit as st
 from simulator import charts, config
 from simulator.database import (
     get_float_setting,
-    get_last_price,
     list_assets,
-    list_cash_movements,
-    list_plan_names,
-    list_transactions,
-    load_plan,
     load_tax_settings,
 )
-from simulator.models import Plan, TaxSettings
-from simulator.plan import build_flows, validate_plan
-from simulator.portfolio import compute_positions, gross_deposits, total_deposits, weighted_fees
+from simulator.models import TaxSettings
+from simulator.plan import build_flow_parts, validate_plan
+from simulator.portfolio import weighted_fees
 from simulator.projection import (
     add_net_value,
     date_target_reached,
@@ -29,57 +24,10 @@ from simulator.projection import (
     yearly_table,
 )
 from simulator.taxes import CTO, PEA, pea_five_year_date
-from views.common import format_eur, format_pct, get_conn, get_plan
+from views.common import format_eur, format_number, format_pct, get_conn
+from views.inputs import choose_plan, render_start
 
-
-def choose_plan() -> Plan:
-    """The plan of the Plan page, or one of the saved plans."""
-    current = get_plan()
-    # each text is unique: Streamlit finds the chosen option by its text
-    choices = {f"{current.name} (as shown in the Plan page)": current}
-    for name in list_plan_names(get_conn()):
-        choices[f"{name} (saved)"] = None
-    label = st.selectbox("Plan", list(choices), key="projection_plan")
-    if choices[label] is not None:
-        return current
-    return load_plan(get_conn(), label.removesuffix(" (saved)"))
-
-
-def portfolio_start() -> tuple[float, float, float]:
-    """Value, net deposits and total deposits of the tracked portfolio."""
-    conn = get_conn()
-    assets = list_assets(conn)
-    prices = {asset.id: get_last_price(conn, asset.id) for asset in assets}
-    prices = {asset_id: price for asset_id, price in prices.items() if price is not None}
-    positions = compute_positions(assets, list_transactions(conn), prices)
-    cash = list_cash_movements(conn)
-    value = sum(p.value for p in positions if p.value is not None)
-    return value, total_deposits(cash), gross_deposits(cash)
-
-
-def render_start() -> tuple[float, float, float]:
-    """Where the projection starts from: (value, net deposits, deposits counted in the ceiling)."""
-    source = st.segmented_control(
-        "Starting point",
-        ["Current portfolio", "Custom"],
-        default="Current portfolio",
-        required=True,
-        key="projection_start",
-    )
-    if source == "Current portfolio":
-        value, deposits, all_deposits = portfolio_start()
-        st.caption(f"Value {format_eur(value)}, deposits {format_eur(deposits)}, from Portfolio.")
-        return value, deposits, all_deposits
-    left, right = st.columns(2)
-    value = left.number_input("Starting value (€)", min_value=0.0, step=500.0, key="custom_value")
-    deposits = right.number_input(
-        "Deposits already made (€)",
-        min_value=0.0,
-        step=500.0,
-        key="custom_deposits",
-        help="Used for the tax (the gain is the value minus the deposits) and the PEA ceiling.",
-    )
-    return value, deposits, deposits
+RESERVED_NAMES = ("date", "contributions", "livret a")
 
 
 def render_scenarios() -> dict[str, float]:
@@ -99,8 +47,11 @@ def render_scenarios() -> dict[str, float]:
             format="%.2f",
             key=f"sc_rate_{number}",
         )
-        # two scenarios with the same name would share a curve: keep them apart
-        scenarios[label.strip() or f"Scenario {number + 1}"] = round(gross / 100, 6)
+        # each name becomes a column of the chart: it must be unique, and not one of ours
+        name = label.strip() or f"Scenario {number + 1}"
+        if name in scenarios or name.lower() in RESERVED_NAMES:
+            name = f"{name} ({number + 1})"
+        scenarios[name] = round(gross / 100, 6)
     return scenarios
 
 
@@ -119,9 +70,9 @@ settings: TaxSettings = load_tax_settings(conn)
 with st.container(border=True):
     left, right = st.columns(2)
     with left:
-        plan = choose_plan()
+        plan = choose_plan("projection")
     with right:
-        start_value, start_deposits, counted_in_ceiling = render_start()
+        start_value, start_deposits, counted_in_ceiling = render_start("projection")
     scenarios = render_scenarios()
 
     left, middle, right = st.columns(3)
@@ -175,7 +126,8 @@ if errors:
     st.error("This plan cannot be simulated:\n\n" + "\n\n".join(errors))
     st.page_link("views/plan.py", label="Fix it in Plan", icon=":material/edit:")
     st.stop()
-flows = build_flows(plan, today, inflation, index_on_inflation=index_deposits)
+# deposits and withdrawals apart: the PEA ceiling and the warnings look at one or the other
+flows = build_flow_parts(plan, today, inflation, index_on_inflation=index_deposits)
 if flows.empty:
     st.info("This plan ends before next month: choose a later end date in Plan.")
     st.page_link("views/plan.py", label="Go to Plan", icon=":material/edit:")
@@ -202,11 +154,13 @@ for name, table in projections.items():
     curves[name] = displayed(table, measure, real)
 curves["Contributions"] = displayed(first, "contributions", real)
 if show_livret:
+    livret_ceiling = get_float_setting(conn, "livret_ceiling", config.DEFAULT_LIVRET_CEILING)
+    # a Livret A cannot hold more than its ceiling: the comparison starts with what fits in it
     livret = project_livret(
-        start_value,
+        min(start_value, livret_ceiling),
         flows,
         get_float_setting(conn, "livret_rate", config.DEFAULT_LIVRET_RATE),
-        get_float_setting(conn, "livret_ceiling", config.DEFAULT_LIVRET_CEILING),
+        livret_ceiling,
     )
     curves["Livret A"] = displayed(livret, "value", real)
 
@@ -221,14 +175,26 @@ if show_livret:
         "Livret A: same starting amount and same plan. Interest is added monthly here; the real "
         "one is computed by fortnight and added once a year. No tax on a Livret A."
     )
-    refused = livret["not_invested"].sum()
+    refused = livret["not_invested"].sum() + max(start_value - livret_ceiling, 0.0)
     if refused > 0:
-        st.caption(f"{format_eur(refused)} of deposits not invested: Livret A ceiling reached.")
+        st.caption(
+            f"{format_eur(refused)} could not go in: Livret A ceiling of "
+            f"{format_eur(livret_ceiling)} reached. That money is left out of its curve."
+        )
 
 # warnings
-first_flows = first["flow"].iloc[1:].to_numpy()
-if (first_flows > flows.to_numpy() + 0.005).any():
-    st.warning("A planned withdrawal is larger than the value at that time: it is limited to it.")
+planned = (flows["deposit"] - flows["withdrawal"]).to_numpy()
+limited = [
+    name
+    for name, table in projections.items()
+    if (table["flow"].iloc[1:].to_numpy() > planned + 0.005).any()
+]
+if limited:
+    st.warning(
+        "A planned withdrawal is larger than the value at that time, and is limited to it, in: "
+        + ", ".join(limited)
+        + "."
+    )
 if envelope == PEA:
     over = first[first["contributions_cto"] > 0]
     if not over.empty:
@@ -239,8 +205,8 @@ if envelope == PEA:
     five_years = pea_five_year_date(open_date) if open_date else None
     early = [
         day
-        for day, flow in flows.items()
-        if flow < 0 and (not five_years or day.date() < five_years)
+        for day, withdrawal in flows["withdrawal"].items()
+        if withdrawal > 0 and (not five_years or day.date() < five_years)
     ]
     if early:
         reason = (
@@ -294,17 +260,15 @@ with right:
     st.subheader("Year by year")
     yearly = yearly_table(curves).drop(columns=["date"]).round(2)
     yearly = yearly.rename(columns={"year": "Year"})
+    amounts = [name for name in yearly.columns if name != "Year"]
     st.dataframe(
-        yearly,
+        # the cells stay numbers (sorting works); only their text gets spaces between thousands
+        yearly.style.format(format_number, subset=amounts),
         hide_index=True,
         height=360,
         column_config={
             "Year": st.column_config.NumberColumn(format="%d"),
-            **{
-                name: st.column_config.NumberColumn(f"{name} (€)", format="%.2f")
-                for name in yearly.columns
-                if name != "Year"
-            },
+            **{name: st.column_config.Column(f"{name} (€)") for name in amounts},
         },
     )
     st.download_button(

@@ -12,6 +12,7 @@ from simulator.plan import (
     add_job_change,
     add_unemployment,
     add_windfall,
+    build_flow_parts,
     build_flows,
     plan_from_frames,
     plan_from_json,
@@ -331,3 +332,71 @@ def test_an_empty_plan_gives_empty_tables_with_the_right_columns():
     assert list(phases.columns) == ["label", "start", "end", "monthly_amount", "increase_pct"]
     assert list(one_offs.columns) == ["label", "date", "amount"]
     assert plan_from_frames("Empty", date(2040, 1, 1), phases, one_offs)[0].phases == []
+
+
+# A phase with raises that an event splits must keep its amounts and its raise dates.
+RAISED = Plan(
+    "Raised",
+    date(2031, 12, 31),
+    [Phase("Job", date(2027, 1, 1), date(2031, 12, 31), 100.0, 0.10)],
+    [],
+)
+
+
+def test_unemployment_only_changes_the_months_of_the_pause():
+    before = build_flows(RAISED, START)
+
+    plan = add_unemployment(RAISED, date(2029, 4, 1), 6)  # April to September 2029
+    after = build_flows(plan, START)
+
+    paused = (after.index >= "2029-04-01") & (after.index <= "2029-09-30")
+    assert (after[paused] == 0).all()
+    assert after[~paused].tolist() == pytest.approx(before[~paused].tolist())
+    assert after["2030-01-31"] == pytest.approx(133.1)  # the raise of January 2030 is kept
+    assert validate_plan(plan) == []
+
+
+def test_a_decrease_is_taken_off_the_raised_amount_of_each_year():
+    before = build_flows(RAISED, START)
+
+    plan = add_child(RAISED, date(2028, 7, 1), 50.0, 2)  # July 2028 to June 2030
+    after = build_flows(plan, START)
+
+    lowered = (after.index >= "2028-07-01") & (after.index <= "2030-06-30")
+    assert after[lowered].tolist() == pytest.approx((before[lowered] - 50.0).tolist())
+    assert after[~lowered].tolist() == pytest.approx(before[~lowered].tolist())
+    assert after["2029-01-31"] == pytest.approx(71.0)  # 121 - 50, not (110 - 50) x 1.1
+    assert validate_plan(plan) == []
+
+
+def test_a_decrease_larger_than_the_deposit_stops_at_zero_only_while_it_is_larger():
+    plan = add_child(RAISED, date(2027, 1, 1), 115.0, 3)  # deposits of 100, 110, then 121
+    after = build_flows(plan, START)
+
+    assert after["2027-06-30"] == 0.0
+    assert after["2028-06-30"] == 0.0
+    assert after["2029-06-30"] == pytest.approx(6.0)  # 121 - 115
+
+
+def test_job_change_in_the_middle_of_a_year_keeps_the_earlier_amounts():
+    before = build_flows(RAISED, START)
+
+    after = build_flows(add_job_change(RAISED, date(2029, 4, 1), 500.0), START)
+
+    earlier = after.index < "2029-04-01"
+    assert after[earlier].tolist() == pytest.approx(before[earlier].tolist())
+    assert (after[~earlier] == 500.0).all()
+
+
+def test_deposits_and_withdrawals_of_a_same_month_are_kept_apart():
+    plan = plan_with(
+        [Phase("Job", date(2027, 1, 1), date(2027, 3, 31), 300.0)],
+        [OneOff("Car", date(2027, 2, 10), -100.0), OneOff("Bonus", date(2027, 2, 20), 50.0)],
+        end=date(2027, 3, 31),
+    )
+
+    parts = build_flow_parts(plan, START)
+
+    assert parts["deposit"].tolist() == [300.0, 350.0, 300.0]
+    assert parts["withdrawal"].tolist() == [0.0, 100.0, 0.0]
+    assert build_flows(plan, START).tolist() == [300.0, 250.0, 300.0]  # the net flow

@@ -105,7 +105,7 @@ def render_editors(shown: Plan, key: str, today: date) -> tuple[Plan, int]:
             "start": st.column_config.DateColumn("Start", format=DATE_FORMAT),
             "end": st.column_config.DateColumn("End", format=DATE_FORMAT),
             "monthly_amount": st.column_config.NumberColumn(
-                "Monthly amount (€)", min_value=0.0, format="%.2f"
+                "Monthly amount (€)", min_value=0.0, format="%,.2f"
             ),
             "increase_pct": st.column_config.NumberColumn(
                 "Yearly increase (%)",
@@ -126,7 +126,7 @@ def render_editors(shown: Plan, key: str, today: date) -> tuple[Plan, int]:
         column_config={
             "label": st.column_config.TextColumn("Label"),
             "date": st.column_config.DateColumn("Date", format=DATE_FORMAT),
-            "amount": st.column_config.NumberColumn("Amount (€)", format="%.2f"),
+            "amount": st.column_config.NumberColumn("Amount (€)", format="%,.2f"),
         },
     )
     return plan_from_frames(name, end, edited_phases, edited_one_offs)
@@ -169,7 +169,9 @@ def apply_event(plan: Plan, event: str, today: date) -> Plan | None:
     """The form of one life event. Returns the changed plan once the form is submitted."""
     with st.form(f"event_{event}", border=False):
         left, middle, right = st.columns(3)
-        day = left.date_input("Date", value=today, min_value=today, format=DATE_FORMAT)
+        # the simulation starts next month: an event dated this month would be ignored
+        next_month = (pd.Period(today, freq="M") + 1).start_time.date()
+        day = left.date_input("Date", value=next_month, min_value=next_month, format=DATE_FORMAT)
         if event == "New job / raise":
             amount = middle.number_input("New monthly amount (€)", min_value=0.0, step=50.0)
         elif event == "Unemployment":

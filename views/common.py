@@ -14,6 +14,13 @@ def format_eur(amount: float | None) -> str:
     return f"{amount:,.2f} €".replace(",", " ")
 
 
+def format_number(value: float | None, decimals: int = 2) -> str:
+    """A number with a space between thousands, for table cells: 12 345.67."""
+    if value is None:
+        return "—"
+    return f"{value:,.{decimals}f}".replace(",", " ")
+
+
 def format_pct(rate: float | None, decimals: int = 1) -> str:
     """A decimal rate as a percentage: 0.1337 gives 13.4 %."""
     if rate is None:

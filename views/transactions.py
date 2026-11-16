@@ -16,7 +16,14 @@ from simulator.database import (
 from simulator.importer import export_transactions
 from simulator.models import Asset, CashMovement, Transaction
 from simulator.portfolio import first_oversold_sale, trade_errors
-from views.common import asset_label, format_eur, get_conn, set_flash, show_flash
+from views.common import (
+    asset_label,
+    format_eur,
+    format_quantity,
+    get_conn,
+    set_flash,
+    show_flash,
+)
 
 KINDS = {"Buy": "BUY", "Sell": "SELL"}
 CASH_KINDS = {"Deposit": "DEPOSIT", "Withdrawal": "WITHDRAWAL"}
@@ -272,7 +279,7 @@ def render_trade_history(assets: list[Asset]) -> None:
             "Date": [f"{tx.date:%d/%m/%Y}" for tx in shown],
             "Asset": [names[tx.asset_id] for tx in shown],
             "Type": [KIND_LABELS[tx.kind] for tx in shown],
-            "Quantity": [f"{tx.quantity:g}" for tx in shown],
+            "Quantity": [format_quantity(tx.quantity) for tx in shown],
             "Unit price": [format_eur(tx.unit_price) for tx in shown],
             "Fees": [format_eur(tx.fees) for tx in shown],
             "Total": [

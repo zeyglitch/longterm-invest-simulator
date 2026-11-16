@@ -32,29 +32,48 @@ def _apply_flow(value: float, contributions: float, flow: float) -> tuple[float,
     return value - withdrawal, contributions - capital, -withdrawal
 
 
-def _start_date(flows: pd.Series) -> pd.Timestamp:
+def _start_date(flows: pd.Series | pd.DataFrame) -> pd.Timestamp:
     """Date of the starting row: the month end just before the first flow."""
     if flows.empty:
         return pd.NaT
     return flows.index[0] - pd.offsets.MonthEnd(1)
 
 
+def _monthly_parts(flows: pd.Series | pd.DataFrame):
+    """Yield (date, deposit, withdrawal) for each month, both amounts positive or zero.
+
+    `flows` is either one net flow per month (positive: deposit, negative: withdrawal), or a
+    table with the columns `deposit` and `withdrawal` as built by `plan.build_flow_parts`. The
+    table matters when a month has both: the two must not be netted before the rules apply.
+    """
+    if isinstance(flows, pd.DataFrame):
+        yield from zip(flows.index, flows["deposit"], flows["withdrawal"], strict=True)
+    else:
+        for day, flow in flows.items():
+            yield day, max(flow, 0.0), max(-flow, 0.0)
+
+
 def project(
-    start_value: float, start_contributions: float, flows: pd.Series, annual_return: float
+    start_value: float,
+    start_contributions: float,
+    flows: pd.Series | pd.DataFrame,
+    annual_return: float,
 ) -> pd.DataFrame:
     """Value of the portfolio month by month, as `date`, `value`, `contributions`, `gains`, `flow`.
 
-    `flows` has one amount per month (index: month ends), positive for a deposit, negative for a
-    withdrawal. Each month the value grows first, then the flow arrives. The first row is the
-    start, before any flow. `flow` is what really moved: a withdrawal is capped at the value.
+    `flows` has one row per month (index: month ends): a net amount, or a deposit and a
+    withdrawal (see `_monthly_parts`). Each month the value grows first, then the deposit
+    arrives, then the withdrawal leaves. The first row is the start, before any flow. `flow` is
+    what really moved, deposit minus withdrawal: a withdrawal is capped at the value.
     """
     rate = monthly_rate(annual_return)
     value, contributions = start_value, start_contributions
     rows = [(_start_date(flows), value, contributions, 0.0)]
-    for day, flow in flows.items():
+    for day, deposit, withdrawal in _monthly_parts(flows):
         value *= 1 + rate
-        value, contributions, moved = _apply_flow(value, contributions, flow)
-        rows.append((day, value, contributions, moved))
+        value, contributions, _ = _apply_flow(value, contributions, deposit)
+        value, contributions, taken = _apply_flow(value, contributions, -withdrawal)
+        rows.append((day, value, contributions, deposit + taken))
     table = pd.DataFrame(rows, columns=["date", "value", "contributions", "flow"])
     table["gains"] = table["value"] - table["contributions"]
     return table[["date", "value", "contributions", "gains", "flow"]]
@@ -63,7 +82,7 @@ def project(
 def project_with_ceiling(
     start_value: float,
     start_contributions: float,
-    flows: pd.Series,
+    flows: pd.Series | pd.DataFrame,
     annual_return: float,
     ceiling: float,
     already_deposited: float,
@@ -80,20 +99,16 @@ def project_with_ceiling(
     cto, cto_paid = 0.0, 0.0
     deposited = already_deposited
     rows = [(_start_date(flows), pea, cto, pea_paid, cto_paid, 0.0)]
-    for day, flow in flows.items():
+    for day, deposit, withdrawal in _monthly_parts(flows):
         pea *= 1 + rate
         cto *= 1 + rate
-        if flow >= 0:
-            to_pea = min(flow, max(0.0, ceiling - deposited))
-            deposited += to_pea
-            pea, pea_paid, _ = _apply_flow(pea, pea_paid, to_pea)
-            cto, cto_paid, _ = _apply_flow(cto, cto_paid, flow - to_pea)
-            moved = flow
-        else:
-            cto, cto_paid, from_cto = _apply_flow(cto, cto_paid, flow)
-            pea, pea_paid, from_pea = _apply_flow(pea, pea_paid, flow - from_cto)
-            moved = from_cto + from_pea
-        rows.append((day, pea, cto, pea_paid, cto_paid, moved))
+        to_pea = min(deposit, max(0.0, ceiling - deposited))
+        deposited += to_pea
+        pea, pea_paid, _ = _apply_flow(pea, pea_paid, to_pea)
+        cto, cto_paid, _ = _apply_flow(cto, cto_paid, deposit - to_pea)
+        cto, cto_paid, from_cto = _apply_flow(cto, cto_paid, -withdrawal)
+        pea, pea_paid, from_pea = _apply_flow(pea, pea_paid, -withdrawal - from_cto)
+        rows.append((day, pea, cto, pea_paid, cto_paid, deposit + from_cto + from_pea))
     columns = ["date", "value_pea", "value_cto", "contributions_pea", "contributions_cto", "flow"]
     table = pd.DataFrame(rows, columns=columns)
     table["value"] = table["value_pea"] + table["value_cto"]
@@ -103,7 +118,7 @@ def project_with_ceiling(
 
 
 def project_livret(
-    start_value: float, flows: pd.Series, rate: float, ceiling: float
+    start_value: float, flows: pd.Series | pd.DataFrame, rate: float, ceiling: float
 ) -> pd.DataFrame:
     """Balance of a Livret A month by month, as `date`, `value`, `contributions`, `gains`,
     `flow`, `not_invested`.
@@ -115,12 +130,12 @@ def project_livret(
     monthly = monthly_rate(rate)
     value, contributions = start_value, start_value
     rows = [(_start_date(flows), value, contributions, 0.0, 0.0)]
-    for day, flow in flows.items():
+    for day, deposit, withdrawal in _monthly_parts(flows):
         value *= 1 + monthly
-        accepted = flow if flow < 0 else max(0.0, min(flow, ceiling - value))
-        refused = max(0.0, flow - accepted)
-        value, contributions, moved = _apply_flow(value, contributions, accepted)
-        rows.append((day, value, contributions, moved, refused))
+        accepted = max(0.0, min(deposit, ceiling - value))
+        value, contributions, _ = _apply_flow(value, contributions, accepted)
+        value, contributions, taken = _apply_flow(value, contributions, -withdrawal)
+        rows.append((day, value, contributions, accepted + taken, deposit - accepted))
     columns = ["date", "value", "contributions", "flow", "not_invested"]
     table = pd.DataFrame(rows, columns=columns)
     table["gains"] = table["value"] - table["contributions"]
@@ -134,7 +149,11 @@ def to_real(values: pd.Series, inflation: float) -> pd.Series:
 
 
 def fees_cost(
-    start_value: float, start_contributions: float, flows: pd.Series, gross: float, fees: float
+    start_value: float,
+    start_contributions: float,
+    flows: pd.Series | pd.DataFrame,
+    gross: float,
+    fees: float,
 ) -> float:
     """Euros lost to the fund's fees at the end: final value without fees minus with fees."""
     without_fees = project(start_value, start_contributions, flows, gross)

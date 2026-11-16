@@ -1,5 +1,5 @@
 from simulator.models import Asset
-from views.common import asset_label, format_eur, format_pct, format_quantity
+from views.common import asset_label, format_eur, format_number, format_pct, format_quantity
 
 
 def test_euros_have_two_decimals_and_spaces_between_thousands():
@@ -7,6 +7,13 @@ def test_euros_have_two_decimals_and_spaces_between_thousands():
     assert format_eur(1234567.891) == "1 234 567.89 €"
     assert format_eur(-5) == "-5.00 €"
     assert format_eur(None) == "—"
+
+
+def test_numbers_in_tables_have_spaces_between_thousands():
+    assert format_number(1234567.891) == "1 234 567.89"
+    assert format_number(-12345.5) == "-12 345.50"
+    assert format_number(999.0) == "999.00"
+    assert format_number(None) == "—"
 
 
 def test_percentages_have_one_decimal_by_default():
