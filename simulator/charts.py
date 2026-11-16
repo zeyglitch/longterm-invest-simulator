@@ -212,3 +212,100 @@ def gains_chart(table: pd.DataFrame) -> go.Figure:
             )
         )
     return figure
+
+
+def fan_chart(bands: pd.DataFrame, samples: pd.DataFrame) -> go.Figure:
+    """Spread of the random paths over time: median, 25-75 % band and 10-90 % band.
+
+    `bands` has the columns `date`, 10, 25, 50, 75, 90 (percentiles) and `contributions`.
+    `samples` holds a few single paths, one per column, drawn as thin lines behind.
+    """
+    figure = _base_figure(
+        legend={"orientation": "h", "y": 1.1, "x": 0},
+        yaxis={"ticksuffix": " €", "tickformat": ",.0f"},
+    )
+    for column in samples:
+        figure.add_trace(
+            go.Scatter(
+                x=bands["date"],
+                y=samples[column],
+                line={"color": "rgba(138, 148, 166, 0.25)", "width": 1},
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+    # each band is two lines, the second one filled down to the first
+    for low, high, colour, name in [
+        (10, 90, "rgba(91, 141, 239, 0.18)", "10-90 %"),
+        (25, 75, "rgba(91, 141, 239, 0.35)", "25-75 %"),
+    ]:
+        figure.add_trace(
+            go.Scatter(
+                x=bands["date"], y=bands[low], line={"width": 0}, hoverinfo="skip", showlegend=False
+            )
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=bands["date"],
+                y=bands[high],
+                line={"width": 0},
+                fill="tonexty",
+                fillcolor=colour,
+                name=name,
+                hoverinfo="skip",
+            )
+        )
+    figure.add_trace(
+        go.Scatter(
+            x=bands["date"],
+            y=bands[50],
+            name="Median",
+            line={"color": VALUE_COLOR, "width": 2},
+            hovertemplate="%{x|%b %Y}: %{y:,.0f} €<extra>Median</extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=bands["date"],
+            y=bands["contributions"],
+            name="Contributions",
+            line={"color": INVESTED_COLOR, "width": 2, "dash": "dash"},
+            hovertemplate="%{y:,.0f} €<extra>Contributions</extra>",
+        )
+    )
+    return figure
+
+
+def histogram_chart(final_values: pd.Series, target: float | None = None) -> go.Figure:
+    """How the final values of the paths are spread. `target` draws a vertical line.
+
+    The 1 % highest values are grouped out of sight: a few huge paths would flatten the rest.
+    """
+    shown = final_values[final_values <= final_values.quantile(0.99)]
+    figure = _base_figure(
+        xaxis={"ticksuffix": " €", "tickformat": ",.0f"},
+        yaxis={"title": "Number of paths"},
+        bargap=0.05,
+    )
+    figure.add_trace(
+        go.Histogram(
+            x=shown,
+            nbinsx=60,
+            marker={"color": VALUE_COLOR},
+            hovertemplate="%{x}: %{y} paths<extra></extra>",
+        )
+    )
+    figure.add_vline(
+        x=final_values.median(),
+        line={"color": DEPOSIT_COLOR, "width": 2},
+        annotation_text="Median",
+        annotation_position="top",
+    )
+    if target:
+        figure.add_vline(
+            x=target,
+            line={"color": INVESTED_COLOR, "width": 2, "dash": "dot"},
+            annotation_text="Target",
+            annotation_position="top right",
+        )
+    return figure

@@ -3,6 +3,7 @@
 import sqlite3
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
 from yfinance.exceptions import YFException
@@ -108,3 +109,16 @@ def latest_price_date(conn: sqlite3.Connection) -> date | None:
     latest = [get_last_price(conn, asset.id) for asset in list_assets(conn)]
     dates = [found[0] for found in latest if found is not None]
     return max(dates) if dates else None
+
+
+def monthly_returns(prices: pd.Series) -> pd.Series:
+    """Log returns from one month end to the next: ln(P_t / P_t-1). Empty without prices."""
+    if prices.empty:  # what fetch_history returns when Yahoo does not answer
+        return pd.Series(dtype=float)
+    month_ends = prices.resample("ME").last().dropna()
+    # the month of the last price is not over if a business day is left in it: its return
+    # would cover a part of a month only, so it is left out
+    last = prices.index[-1]
+    if (last + pd.offsets.BDay(1)).month == last.month:
+        month_ends = month_ends.iloc[:-1]
+    return np.log(month_ends / month_ends.shift(1)).dropna()
