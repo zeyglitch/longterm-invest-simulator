@@ -21,10 +21,10 @@ from simulator.montecarlo import (
 )
 from simulator.plan import build_flow_parts, plan_to_json, validate_plan
 from simulator.portfolio import weighted_fees
-from simulator.prices import fetch_history, monthly_returns
+from simulator.prices import monthly_returns
 from simulator.projection import net_return, project
 from simulator.taxes import CTO, PEA, tax_rate
-from views.common import data_mode, format_eur, format_pct, get_conn
+from views.common import cached_history, data_mode, format_eur, format_pct, get_conn
 from views.inputs import choose_plan, render_start
 
 NORMAL = "Normal returns"
@@ -32,17 +32,6 @@ BOOTSTRAP = "Historical bootstrap"
 SAMPLE_PATHS = 20
 MIN_HISTORY_MONTHS = 60
 HORIZON_YEARS = (10, 20, 30)
-
-
-def benchmark_history(ticker: str) -> pd.Series:
-    """Prices of the reference index, downloaded once per session. Empty if Yahoo fails."""
-    key = f"benchmark_{ticker}"
-    if key not in st.session_state:
-        history = fetch_history(ticker)
-        if history.empty:
-            return history  # not kept: the next click tries again
-        st.session_state[key] = history
-    return st.session_state[key]
 
 
 def describe_history(history: pd.Series) -> str:
@@ -53,7 +42,7 @@ def describe_history(history: pd.Series) -> str:
 def estimate_from_history() -> None:
     """Called by `Estimate from history`: fill the mean return and the volatility."""
     ticker = st.session_state["mc_ticker"].strip().upper()
-    history = benchmark_history(ticker)
+    history = cached_history(ticker)
     if len(monthly_returns(history)) < 2:
         st.session_state["mc_estimate"] = ("warning", f"No usable price history for {ticker}.")
         return
@@ -269,7 +258,7 @@ if run:
         )
     else:
         with st.spinner("Downloading the price history..."):
-            history = benchmark_history(ticker.strip().upper())
+            history = cached_history(ticker.strip().upper())
         past = monthly_returns(history)
         if len(past) < 2:
             st.error(f"No usable price history for {ticker}. Check the ticker and your connection.")

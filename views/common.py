@@ -1,10 +1,12 @@
 import sqlite3
 from datetime import date
 
+import pandas as pd
 import streamlit as st
 
 from simulator.database import list_plan_names, load_plan
 from simulator.models import Plan
+from simulator.prices import fetch_history
 
 
 def format_eur(amount: float | None) -> str:
@@ -81,4 +83,15 @@ def get_plan() -> Plan:
         else:
             end = date(date.today().year + DEFAULT_HORIZON_YEARS, 12, 31)
             st.session_state[key] = Plan(name="My plan", end=end, phases=[], one_offs=[])
+    return st.session_state[key]
+
+
+def cached_history(ticker: str) -> pd.Series:
+    """Full price history of a Yahoo ticker, downloaded once per session. Empty if Yahoo fails."""
+    key = f"history_{ticker}"
+    if key not in st.session_state:
+        history = fetch_history(ticker)
+        if history.empty:
+            return history  # not kept: the next click tries again
+        st.session_state[key] = history
     return st.session_state[key]
