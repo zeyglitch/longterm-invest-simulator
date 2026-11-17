@@ -24,7 +24,7 @@ from simulator.projection import (
     yearly_table,
 )
 from simulator.taxes import CTO, PEA, pea_five_year_date, tax_rate
-from views.common import format_eur, format_number, format_pct, get_conn
+from views.common import data_mode, format_eur, format_number, format_pct, get_conn
 from views.inputs import choose_plan, render_start
 
 RESERVED_NAMES = ("date", "contributions", "livret a")
@@ -244,6 +244,16 @@ if envelope == PEA:
             f"A withdrawal is planned in {early[0]:%B %Y}, {reason}: before 5 years it closes the "
             "PEA and the gain bears the flat tax. This tool does not simulate the closing."
         )
+
+# kept for the Withdrawal page, which can start from the end of one of these scenarios
+st.session_state[f"projection_result_{data_mode()}"] = {
+    name: {
+        "value": table["value"].iloc[-1],
+        "contributions": table["contributions"].iloc[-1],
+        "date": table["date"].iloc[-1].date(),
+    }
+    for name, table in projections.items()
+}
 
 # results at the horizon
 st.subheader(f"At the horizon ({first['date'].iloc[-1]:%B %Y})")
