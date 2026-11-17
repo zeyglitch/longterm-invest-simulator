@@ -18,6 +18,9 @@ DEFAULT_SCENARIOS = {"Pessimistic": 0.03, "Central": 0.06, "Optimistic": 0.08}
 # gross yearly return of the CTO that takes the deposits above the PEA ceiling
 DEFAULT_CTO_RETURN = 0.07
 DEFAULT_VOLATILITY = 0.15
+# a mixed 60/40 portfolio seen as one asset: assumptions, to be changed by the user
+DEFAULT_MIXED_RETURN = 0.045
+DEFAULT_MIXED_VOLATILITY = 0.09
 DEFAULT_N_PATHS = 5_000
 DEFAULT_SEED = 42
 DEFAULT_BENCHMARK = "CW8.PA"

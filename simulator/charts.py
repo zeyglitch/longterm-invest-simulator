@@ -190,6 +190,41 @@ def projection_chart(
     return figure
 
 
+def comparison_chart(curves: pd.DataFrame) -> go.Figure:
+    """Several values over time, to compare them: one line per column of `curves`.
+
+    `curves` has a `date` column and one column per envelope or strategy. A `Contributions`
+    column, if there is one, is drawn dashed in grey.
+    """
+    figure = _base_figure(
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.1, "x": 0},
+        yaxis={"ticksuffix": " €", "tickformat": ",.0f"},
+    )
+    names = [name for name in curves.columns if name not in ("date", "Contributions")]
+    for number, name in enumerate(names):
+        figure.add_trace(
+            go.Scatter(
+                x=curves["date"],
+                y=curves[name],
+                name=name,
+                line={"color": PALETTE[number % len(PALETTE)], "width": 2},
+                hovertemplate="%{y:,.0f} €",
+            )
+        )
+    if "Contributions" in curves:
+        figure.add_trace(
+            go.Scatter(
+                x=curves["date"],
+                y=curves["Contributions"],
+                name="Contributions",
+                line={"color": INVESTED_COLOR, "width": 2, "dash": "dash"},
+                hovertemplate="%{y:,.0f} €",
+            )
+        )
+    return figure
+
+
 def gains_chart(table: pd.DataFrame) -> go.Figure:
     """Deposits and gains in the final value of each scenario, as stacked bars.
 
@@ -217,7 +252,8 @@ def gains_chart(table: pd.DataFrame) -> go.Figure:
 def fan_chart(bands: pd.DataFrame, samples: pd.DataFrame) -> go.Figure:
     """Spread of the random paths over time: median, 25-75 % band and 10-90 % band.
 
-    `bands` has the columns `date`, 10, 25, 50, 75, 90 (percentiles) and `contributions`.
+    `bands` has the columns `date`, 10, 25, 50, 75, 90 (percentiles) and, if wanted,
+    `contributions`.
     `samples` holds a few single paths, one per column, drawn as thin lines behind.
     """
     figure = _base_figure(
@@ -264,15 +300,16 @@ def fan_chart(bands: pd.DataFrame, samples: pd.DataFrame) -> go.Figure:
             hovertemplate="%{x|%b %Y}: %{y:,.0f} €<extra>Median</extra>",
         )
     )
-    figure.add_trace(
-        go.Scatter(
-            x=bands["date"],
-            y=bands["contributions"],
-            name="Contributions",
-            line={"color": INVESTED_COLOR, "width": 2, "dash": "dash"},
-            hovertemplate="%{y:,.0f} €<extra>Contributions</extra>",
+    if "contributions" in bands:
+        figure.add_trace(
+            go.Scatter(
+                x=bands["date"],
+                y=bands["contributions"],
+                name="Contributions",
+                line={"color": INVESTED_COLOR, "width": 2, "dash": "dash"},
+                hovertemplate="%{y:,.0f} €<extra>Contributions</extra>",
+            )
         )
-    )
     return figure
 
 
@@ -308,4 +345,21 @@ def histogram_chart(final_values: pd.Series, target: float | None = None) -> go.
             annotation_text="Target",
             annotation_position="top right",
         )
+    return figure
+
+
+def drawdown_chart(falls: pd.Series) -> go.Figure:
+    """How far the price is below its previous high, over time. `falls` holds 0 at a high and
+    negative shares below it (-0.25 for 25 %), indexed by date."""
+    figure = _base_figure(yaxis={"tickformat": ".2~p"})
+    figure.add_trace(
+        go.Scatter(
+            x=falls.index,
+            y=falls.values,
+            fill="tozeroy",
+            line={"color": WITHDRAWAL_COLOR, "width": 1},
+            fillcolor="rgba(239, 111, 108, 0.3)",
+            hovertemplate="%{x|%d/%m/%Y}: %{y:.1%}<extra></extra>",
+        )
+    )
     return figure
