@@ -86,22 +86,25 @@ def project_with_ceiling(
     annual_return: float,
     ceiling: float,
     already_deposited: float,
+    cto_return: float | None = None,
 ) -> pd.DataFrame:
     """Like `project`, with a PEA whose deposits are capped and a CTO that takes the surplus.
 
     `start_value` and `start_contributions` are those of the PEA; the CTO starts empty.
     `already_deposited` is the total of deposits ever made on the PEA: a withdrawal does not give
-    capacity back. Withdrawals are taken from the CTO first, then from the PEA. Adds the columns
-    `value_pea`, `value_cto`, `contributions_pea`, `contributions_cto`.
+    capacity back. Withdrawals are taken from the CTO first, then from the PEA. The CTO grows at
+    `cto_return`, or like the PEA if it is not given. Adds the columns `value_pea`, `value_cto`,
+    `contributions_pea`, `contributions_cto`.
     """
     rate = monthly_rate(annual_return)
+    cto_rate = rate if cto_return is None else monthly_rate(cto_return)
     pea, pea_paid = start_value, start_contributions
     cto, cto_paid = 0.0, 0.0
     deposited = already_deposited
     rows = [(_start_date(flows), pea, cto, pea_paid, cto_paid, 0.0)]
     for day, deposit, withdrawal in _monthly_parts(flows):
         pea *= 1 + rate
-        cto *= 1 + rate
+        cto *= 1 + cto_rate
         to_pea = min(deposit, max(0.0, ceiling - deposited))
         deposited += to_pea
         pea, pea_paid, _ = _apply_flow(pea, pea_paid, to_pea)
@@ -154,11 +157,32 @@ def fees_cost(
     flows: pd.Series | pd.DataFrame,
     gross: float,
     fees: float,
+    ceiling: float | None = None,
+    already_deposited: float = 0.0,
+    cto_gross: float | None = None,
 ) -> float:
-    """Euros lost to the fund's fees at the end: final value without fees minus with fees."""
-    without_fees = project(start_value, start_contributions, flows, gross)
-    with_fees = project(start_value, start_contributions, flows, net_return(gross, fees))
-    return without_fees["value"].iloc[-1] - with_fees["value"].iloc[-1]
+    """Euros lost to the fund's fees at the end: final value without fees minus with fees.
+
+    With a `ceiling`, the projection is the one of a PEA and its CTO (`project_with_ceiling`),
+    and the same fees are taken on both.
+    """
+
+    def final_value(fee: float) -> float:
+        if ceiling is None:
+            table = project(start_value, start_contributions, flows, net_return(gross, fee))
+        else:
+            table = project_with_ceiling(
+                start_value,
+                start_contributions,
+                flows,
+                net_return(gross, fee),
+                ceiling,
+                already_deposited,
+                None if cto_gross is None else net_return(cto_gross, fee),
+            )
+        return table["value"].iloc[-1]
+
+    return final_value(0.0) - final_value(fees)
 
 
 def date_target_reached(projection: pd.DataFrame, target: float) -> date | None:
@@ -172,27 +196,35 @@ def date_target_reached(projection: pd.DataFrame, target: float) -> date | None:
 def add_net_value(
     projection: pd.DataFrame, envelope: str, open_date: date | None, settings: TaxSettings
 ) -> pd.DataFrame:
-    """Add `tax` and `net_value`: the tax due, and what would be left, if everything were
-    withdrawn in that month.
+    """Add the tax due, and what would be left, if everything were withdrawn in that month.
+
+    The PEA and the CTO are kept apart: `tax_pea`, `tax_cto`, `net_pea`, `net_cto`, then their
+    sums `tax` and `net_value`. A projection without pockets is wholly in `envelope`; its pocket
+    columns are added, the other pocket being empty.
 
     PEA: social charges only from its fifth birthday, the flat tax before (and when the opening
     date is unknown). What sits in a CTO, including the surplus above the PEA ceiling, always
-    bears the flat tax. A pocket in loss owes nothing.
+    bears the flat tax. A pocket in loss owes nothing, and its loss does not lower the tax of the
+    other one.
     """
     table = projection.copy()
+    if "value_pea" not in table:
+        mine, other = ("pea", "cto") if envelope == PEA else ("cto", "pea")
+        table[f"value_{mine}"] = table["value"]
+        table[f"contributions_{mine}"] = table["contributions"]
+        table[f"value_{other}"] = 0.0
+        table[f"contributions_{other}"] = 0.0
+
     flat_tax = settings.ir_rate + settings.ps_rate
     pea_rate = flat_tax
-    if envelope == PEA and open_date is not None:
+    if open_date is not None:
         five_years = pd.Timestamp(pea_five_year_date(open_date))
         pea_rate = np.where(table["date"] >= five_years, settings.ps_rate, flat_tax)
-
-    if "value_pea" in table:
-        pea_gain = (table["value_pea"] - table["contributions_pea"]).clip(lower=0)
-        cto_gain = (table["value_cto"] - table["contributions_cto"]).clip(lower=0)
-    else:
-        pea_gain = table["gains"].clip(lower=0)
-        cto_gain = 0.0
-    table["tax"] = pea_gain * pea_rate + cto_gain * flat_tax
+    for pocket, rate in (("pea", pea_rate), ("cto", flat_tax)):
+        gain = (table[f"value_{pocket}"] - table[f"contributions_{pocket}"]).clip(lower=0)
+        table[f"tax_{pocket}"] = gain * rate
+        table[f"net_{pocket}"] = table[f"value_{pocket}"] - table[f"tax_{pocket}"]
+    table["tax"] = table["tax_pea"] + table["tax_cto"]
     table["net_value"] = table["value"] - table["tax"]
     return table
 

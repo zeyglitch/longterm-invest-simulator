@@ -296,3 +296,60 @@ def test_livret_accepts_a_deposit_up_to_the_ceiling_then_lets_the_withdrawal_out
 
     assert final(projection) == pytest.approx(1100)  # 300 accepted, 200 refused, 200 out
     assert final(projection, "not_invested") == pytest.approx(200)
+
+
+def test_the_cto_can_have_its_own_return():
+    # ceiling already reached: 1 000 stay in the PEA at 0 %, 1 200 go to a CTO at 12 %
+    flows = monthly_flows([1200.0] + [0.0] * 12)
+
+    projection = project_with_ceiling(1000, 1000, flows, 0.0, 1000, 1000, cto_return=0.12)
+
+    assert final(projection, "value_pea") == pytest.approx(1000)
+    assert final(projection, "value_cto") == pytest.approx(1344)
+    assert final(projection) == pytest.approx(2344)
+
+
+def test_tax_and_net_value_are_given_for_each_pocket():
+    # old PEA: 1 000 for 600 deposited ; CTO: 500 deposited that become 1 000
+    projection = project_with_ceiling(1000, 600, monthly_flows([500.0, 0.0]), 0.0, 600, 600)
+    projection.loc[2, "value_cto"] = 1000.0
+    projection.loc[2, "value"] = 2000.0
+
+    last = add_net_value(projection, "PEA", date(2010, 1, 1), TAX).iloc[-1]
+
+    assert last["tax_pea"] == pytest.approx(74.4)  # 400 x 18.6 %
+    assert last["tax_cto"] == pytest.approx(157.0)  # 500 x 31.4 %
+    assert last["net_pea"] == pytest.approx(925.6)
+    assert last["net_cto"] == pytest.approx(843.0)
+    assert last["net_pea"] + last["net_cto"] == pytest.approx(last["net_value"])
+
+
+def test_a_projection_without_pockets_is_wholly_in_its_envelope():
+    projection = project(1000, 600, monthly_flows([0.0]), 0.0)
+
+    pea = add_net_value(projection, "PEA", date(2010, 1, 1), TAX).iloc[-1]
+    cto = add_net_value(projection, "CTO", date(2010, 1, 1), TAX).iloc[-1]
+
+    assert (pea["value_pea"], pea["value_cto"], pea["tax_cto"]) == (1000, 0, 0)
+    assert pea["tax_pea"] == pytest.approx(74.4)
+    assert (cto["value_cto"], cto["value_pea"], cto["tax_pea"]) == (1000, 0, 0)
+    assert cto["tax_cto"] == pytest.approx(125.6)
+
+
+def test_a_loss_in_one_pocket_does_not_lower_the_tax_of_the_other():
+    projection = project_with_ceiling(1000, 600, monthly_flows([500.0, 0.0]), 0.0, 600, 600)
+    projection.loc[2, "value_cto"] = 300.0  # the CTO lost 200
+
+    last = add_net_value(projection, "PEA", date(2010, 1, 1), TAX).iloc[-1]
+
+    assert last["tax_cto"] == 0
+    assert last["tax"] == pytest.approx(74.4)
+
+
+def test_fees_cost_with_a_ceiling_takes_the_fees_on_both_pockets():
+    flows = monthly_flows([100.0] * 120)
+
+    # same return in both pockets: the split does not change the cost (R7)
+    assert fees_cost(0, 0, flows, 0.06, 0.002, ceiling=5000) == pytest.approx(175.76, abs=CENT)
+    # a CTO that earns more loses more to the same fees
+    assert fees_cost(0, 0, flows, 0.06, 0.002, ceiling=5000, cto_gross=0.09) > 175.76

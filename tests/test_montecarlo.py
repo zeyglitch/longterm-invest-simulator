@@ -9,11 +9,13 @@ from simulator.montecarlo import (
     probability_above,
     random_unemployment,
     run_paths,
+    run_paths_with_ceiling,
     simulate_bootstrap,
     simulate_normal,
+    worst_falls,
 )
 from simulator.prices import monthly_returns
-from simulator.projection import project
+from simulator.projection import project, project_with_ceiling
 
 
 def monthly_flows(amounts: list[float]) -> pd.Series:
@@ -219,3 +221,63 @@ def test_unemployment_on_deposits_leaves_the_withdrawal_of_the_same_month():
     # yet the 500 are withdrawn on every path
     assert (lost[:, -1] == 0).all()
     assert paths[:, -1].tolist() == pytest.approx((1000 + lost.sum(axis=1) - 500).tolist())
+
+
+def test_capped_paths_without_volatility_are_the_capped_projection():
+    # 10 000 on a PEA that accepts 3 000 more; the CTO earns 9 % when the PEA earns 6 %
+    returns = np.full((3, 60), np.log(1.06) / 12)
+    extra = (np.log(1.09) - np.log(1.06)) / 12
+
+    paths, final = run_paths_with_ceiling(
+        10_000, FLOWS, returns, 12_000, 9000, start_contributions=9000, cto_extra_return=extra
+    )
+
+    expected = project_with_ceiling(10_000, 9000, FLOWS, 0.06, 12_000, 9000, cto_return=0.09)
+    assert paths[0] == pytest.approx(expected["value"].to_numpy())
+    for column in ("value_pea", "value_cto", "contributions_pea", "contributions_cto"):
+        assert final[column].to_numpy() == pytest.approx(expected[column].iloc[-1])
+    assert final["value_cto"].iloc[0] > 0
+
+
+def test_capped_paths_under_the_ceiling_are_the_plain_paths():
+    returns = np.random.default_rng(1).normal(0.004, 0.04, size=(50, 60))
+
+    plain, contributions = run_paths(10_000, FLOWS, returns, start_contributions=9000)
+    capped, final = run_paths_with_ceiling(
+        10_000, FLOWS, returns, 150_000, 9000, start_contributions=9000
+    )
+
+    assert capped == pytest.approx(plain)
+    assert final["contributions_pea"].to_numpy() == pytest.approx(contributions)
+    assert (final["value_cto"] == 0).all()
+
+
+def test_each_path_reaches_the_ceiling_at_its_own_time():
+    # the first path deposits 100 a month, the second nothing: only the first fills the PEA
+    deposits = np.array([[100.0] * 12, [0.0] * 12])
+
+    _, final = run_paths_with_ceiling(0, deposits, np.zeros((2, 12)), 500, 0)
+
+    assert final["contributions_pea"].tolist() == [500, 0]
+    assert final["contributions_cto"].tolist() == [700, 0]
+
+
+def test_worst_fall_is_measured_from_the_highest_point_before_it():
+    # price of one share: 1, 1.1, 0.55, 0.66, 0.594 -> from 1.1 down to 0.55, a fall of 50 %
+    falling = np.log([1.1, 0.5, 1.2, 0.9])
+    rising = np.log([1.1, 1.0, 1.2, 1.05])
+
+    falls = worst_falls(np.array([falling, rising]))
+
+    assert falls == pytest.approx([0.5, 0.0])
+
+
+def test_worst_fall_does_not_depend_on_the_deposits():
+    returns = np.random.default_rng(3).normal(0.004, 0.05, size=(200, 120))
+
+    falls = worst_falls(returns)
+
+    assert falls.shape == (200,)
+    assert ((falls >= 0) & (falls < 1)).all()
+    # without volatility a rising market never falls
+    assert worst_falls(np.full((2, 12), 0.005)) == pytest.approx([0.0, 0.0])

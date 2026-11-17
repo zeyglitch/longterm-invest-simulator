@@ -23,7 +23,7 @@ from simulator.projection import (
     to_real,
     yearly_table,
 )
-from simulator.taxes import CTO, PEA, pea_five_year_date
+from simulator.taxes import CTO, PEA, pea_five_year_date, tax_rate
 from views.common import format_eur, format_number, format_pct, get_conn
 from views.inputs import choose_plan, render_start
 
@@ -101,6 +101,23 @@ with st.container(border=True):
         key="projection_target",
     )
 
+    cto_return = (
+        left.number_input(
+            "CTO yearly gross return (%)",
+            min_value=-20.0,
+            max_value=30.0,
+            value=config.DEFAULT_CTO_RETURN * 100,
+            step=0.5,
+            format="%.2f",
+            key="projection_cto_return",
+            disabled=envelope == CTO,
+            help="Deposits above the PEA ceiling go to a CTO, which has its own return. This "
+            "one is used in the second scenario; the two others keep the same gap with it as "
+            "the scenarios above. The same fees apply.",
+        )
+        / 100
+    )
+
     left, middle, right = st.columns(3)
     after_tax = left.toggle("After tax", key="projection_after_tax")
     adjust = middle.toggle("Adjust for inflation", key="projection_adjust")
@@ -135,12 +152,22 @@ if flows.empty:
 
 # one projection per scenario, with the tax and the net value month by month
 open_date = settings.pea_open_date
+# gross return of the CTO in each scenario: the one typed, moved by the gap between the scenario
+# and the second one (the central one by default)
+reference = list(scenarios.values())[1]
+cto_gross = {name: round(cto_return + gross - reference, 6) for name, gross in scenarios.items()}
 projections = {}
 for name, gross in scenarios.items():
     net = net_return(gross, fees)
     if envelope == PEA:
         table = project_with_ceiling(
-            start_value, start_deposits, flows, net, settings.pea_ceiling, counted_in_ceiling
+            start_value,
+            start_deposits,
+            flows,
+            net,
+            settings.pea_ceiling,
+            counted_in_ceiling,
+            net_return(cto_gross[name], fees),
         )
     else:
         table = project(start_value, start_deposits, flows, net)
@@ -200,7 +227,8 @@ if envelope == PEA:
     if not over.empty:
         st.warning(
             f"PEA ceiling of {format_eur(settings.pea_ceiling)} reached in "
-            f"{over['date'].iloc[0]:%B %Y}: deposits above it go to a CTO, taxed at the flat tax."
+            f"{over['date'].iloc[0]:%B %Y}: deposits above it go to a CTO, with its own return "
+            "and the flat tax on its gains. See PEA and CTO apart, below."
         )
     five_years = pea_five_year_date(open_date) if open_date else None
     early = [
@@ -220,7 +248,10 @@ if envelope == PEA:
 # results at the horizon
 st.subheader(f"At the horizon ({first['date'].iloc[-1]:%B %Y})")
 months = len(flows)
-rows, parts = [], []
+horizon = first["date"].iloc[-1].date()
+flat_tax = settings.ir_rate + settings.ps_rate
+pocket_rates = {PEA: tax_rate(PEA, open_date, horizon, settings), CTO: flat_tax}
+rows, pocket_rows, parts = [], [], []
 for name, table in projections.items():
     last = table.iloc[-1]
     target_text = "—"
@@ -228,29 +259,87 @@ for name, table in projections.items():
         goal = pd.DataFrame({"date": table["date"], "value": curves[name]})
         reached = date_target_reached(goal, target)
         target_text = f"{reached:%m/%Y}" if reached else "not reached"
-    cost = fees_cost(start_value, start_deposits, flows, scenarios[name], fees)
+    if envelope == PEA:
+        cost = fees_cost(
+            start_value,
+            start_deposits,
+            flows,
+            scenarios[name],
+            fees,
+            settings.pea_ceiling,
+            counted_in_ceiling,
+            cto_gross[name],
+        )
+    else:
+        cost = fees_cost(start_value, start_deposits, flows, scenarios[name], fees)
     rows.append(
         {
             "Scenario": f"{name} ({format_pct(scenarios[name], 2)})",
-            "Gross value": format_eur(last["value"]),
             "Deposits": format_eur(last["contributions"]),
             "Gains": format_eur(last["gains"]),
-            "Estimated tax": format_eur(last["tax"]),
-            "Net value": format_eur(last["net_value"]),
-            "Net, today's euros": format_eur(last["net_value"] / (1 + inflation) ** (months / 12)),
+            "Before tax": format_eur(last["value"]),
+            "Tax": format_eur(last["tax"]),
+            "After tax": format_eur(last["net_value"]),
+            "After tax, today's euros": format_eur(
+                last["net_value"] / (1 + inflation) ** (months / 12)
+            ),
             "Cost of fees": format_eur(cost),
             "Target reached": target_text,
         }
     )
+    # one line per account, then their total; a portfolio wholly in a CTO has one line only
+    returns = {PEA: scenarios[name], CTO: cto_gross[name] if envelope == PEA else scenarios[name]}
+    for account in (PEA, CTO) if envelope == PEA else (CTO,):
+        pocket = account.lower()
+        value, paid = last[f"value_{pocket}"], last[f"contributions_{pocket}"]
+        pocket_rows.append(
+            {
+                "Scenario": name,
+                "Account": account,
+                "Gross return": format_pct(returns[account], 2),
+                "Deposits": format_eur(paid),
+                "Gains": format_eur(value - paid),
+                "Before tax": format_eur(value),
+                "Tax rate": format_pct(pocket_rates[account], 1),
+                "Tax": format_eur(last[f"tax_{pocket}"]),
+                "After tax": format_eur(last[f"net_{pocket}"]),
+            }
+        )
+    if envelope == PEA:
+        pocket_rows.append(
+            {
+                "Scenario": name,
+                "Account": "Total",
+                "Gross return": "",
+                "Deposits": format_eur(last["contributions"]),
+                "Gains": format_eur(last["gains"]),
+                "Before tax": format_eur(last["value"]),
+                "Tax rate": "",
+                "Tax": format_eur(last["tax"]),
+                "After tax": format_eur(last["net_value"]),
+            }
+        )
     parts.append(
         {"scenario": name, "contributions": last["contributions"], "gains": max(last["gains"], 0.0)}
     )
 st.dataframe(pd.DataFrame(rows), hide_index=True)
 st.caption(
-    "Estimated tax: if everything were withdrawn at the horizon, with today's rules and rates. "
+    "Tax: if everything were withdrawn at the horizon, with today's rules and rates. "
     f"Today's euros: with {format_pct(inflation, 2)} of inflation a year. Cost of fees: gap with "
     "the same projection at 0 % of fees. Target: on the curve as shown above."
 )
+
+st.subheader("PEA and CTO apart" if envelope == PEA else "CTO")
+st.dataframe(pd.DataFrame(pocket_rows), hide_index=True)
+if envelope == PEA:
+    st.caption(
+        f"The PEA takes deposits up to its ceiling of {format_eur(settings.pea_ceiling)}; the "
+        "rest goes to the CTO. Deposits: what was put in and not withdrawn. Tax = gains x tax "
+        "rate, for each account on its own: a loss in one does not lower the tax of the other. "
+        "Withdrawals of the plan are taken from the CTO first, then from the PEA."
+    )
+else:
+    st.caption("The whole portfolio is in a CTO: the flat tax applies to all its gains.")
 
 left, right = st.columns(2)
 with left:

@@ -28,6 +28,25 @@ def bootstrap_returns(n_months: int, past_returns, n_paths: int, seed: int) -> n
     return rng.choice(np.asarray(past_returns, dtype=float), size=(n_paths, n_months))
 
 
+def _flow_arrays(flows, withdrawals, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """Deposits and withdrawals of each month of each path, both positive or zero."""
+    flows = np.broadcast_to(np.asarray(flows, dtype=float), shape)
+    if withdrawals is None:
+        return np.maximum(flows, 0.0), np.maximum(-flows, 0.0)
+    return flows, np.broadcast_to(np.asarray(withdrawals, dtype=float), shape)
+
+
+def _withdraw(value: np.ndarray, contributions: np.ndarray, amount: np.ndarray):
+    """Take `amount` out of each path, at most its value. Returns the new value, the new
+    contributions and what was really taken. Capital and gain leave in proportion."""
+    taken = np.minimum(amount, value)
+    # share of the value that is gain; 0 on an empty or losing path
+    gain_share = np.divide(
+        np.maximum(value - contributions, 0.0), value, out=np.zeros(len(value)), where=value > 0
+    )
+    return value - taken, contributions - taken * (1 - gain_share), taken
+
+
 def run_paths(
     start_value: float,
     flows,
@@ -45,30 +64,67 @@ def run_paths(
     removes capital and gain in proportion.
     """
     n_paths, n_months = log_returns.shape
-    flows = np.broadcast_to(np.asarray(flows, dtype=float), (n_paths, n_months))
-    if withdrawals is None:
-        deposits, withdrawals = np.maximum(flows, 0.0), np.maximum(-flows, 0.0)
-    else:
-        deposits = flows
-        withdrawals = np.broadcast_to(np.asarray(withdrawals, dtype=float), (n_paths, n_months))
+    deposits, withdrawals = _flow_arrays(flows, withdrawals, log_returns.shape)
     growth = np.exp(log_returns)
     paths = np.empty((n_paths, n_months + 1))
     paths[:, 0] = start_value
     value = np.full(n_paths, float(start_value))
     contributions = np.full(n_paths, float(start_contributions))
     for month in range(n_months):
-        deposit = deposits[:, month]
-        value = value * growth[:, month] + deposit
-        contributions = contributions + deposit
-        withdrawal = np.minimum(withdrawals[:, month], value)
-        # share of the value that is gain; 0 on an empty or losing path
-        gain_share = np.divide(
-            np.maximum(value - contributions, 0.0), value, out=np.zeros(n_paths), where=value > 0
-        )
-        contributions = contributions - withdrawal * (1 - gain_share)
-        value = value - withdrawal
+        value = value * growth[:, month] + deposits[:, month]
+        contributions = contributions + deposits[:, month]
+        value, contributions, _ = _withdraw(value, contributions, withdrawals[:, month])
         paths[:, month + 1] = value
     return paths, contributions
+
+
+def run_paths_with_ceiling(
+    start_value: float,
+    flows,
+    log_returns: np.ndarray,
+    ceiling: float,
+    already_deposited: float,
+    start_contributions: float = 0.0,
+    withdrawals=None,
+    cto_extra_return: float = 0.0,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Like `run_paths`, with a PEA whose deposits are capped and a CTO that takes the surplus.
+
+    Same rules as `projection.project_with_ceiling`: the start is in the PEA, a withdrawal gives
+    no capacity back and empties the CTO before the PEA. The CTO gets the same random returns as
+    the PEA, plus `cto_extra_return` of log return each month (0: same returns). Returns the
+    total values, shape (n_paths, n_months + 1), and one row per path with the final
+    `value_pea`, `value_cto`, `contributions_pea` and `contributions_cto`.
+    """
+    n_paths, n_months = log_returns.shape
+    deposits, withdrawals = _flow_arrays(flows, withdrawals, log_returns.shape)
+    growth = np.exp(log_returns)
+    cto_growth = np.exp(cto_extra_return)
+    paths = np.empty((n_paths, n_months + 1))
+    paths[:, 0] = start_value
+    pea = np.full(n_paths, float(start_value))
+    pea_paid = np.full(n_paths, float(start_contributions))
+    cto, cto_paid = np.zeros(n_paths), np.zeros(n_paths)
+    deposited = np.full(n_paths, float(already_deposited))
+    for month in range(n_months):
+        to_pea = np.minimum(deposits[:, month], np.maximum(ceiling - deposited, 0.0))
+        to_cto = deposits[:, month] - to_pea
+        deposited = deposited + to_pea
+        pea = pea * growth[:, month] + to_pea
+        cto = cto * growth[:, month] * cto_growth + to_cto
+        pea_paid, cto_paid = pea_paid + to_pea, cto_paid + to_cto
+        cto, cto_paid, from_cto = _withdraw(cto, cto_paid, withdrawals[:, month])
+        pea, pea_paid, _ = _withdraw(pea, pea_paid, withdrawals[:, month] - from_cto)
+        paths[:, month + 1] = pea + cto
+    final = pd.DataFrame(
+        {
+            "value_pea": pea,
+            "value_cto": cto,
+            "contributions_pea": pea_paid,
+            "contributions_cto": cto_paid,
+        }
+    )
+    return paths, final
 
 
 def simulate_normal(
@@ -111,6 +167,18 @@ def random_unemployment(
         in_period = (months >= start) & (months < start + duration_months)
         unemployed |= happens[:, year, None] & in_period
     return np.where(unemployed & (flows > 0), 0.0, flows)
+
+
+def worst_falls(log_returns: np.ndarray) -> np.ndarray:
+    """Largest fall of each path from an earlier high, as a share: 0.35 for a fall of 35 %.
+
+    Measured on the returns alone, like the price of one share of a fund: on the value of the
+    portfolio, the monthly deposits would hide part of each fall.
+    """
+    n_paths = log_returns.shape[0]
+    level = np.hstack([np.zeros((n_paths, 1)), np.cumsum(log_returns, axis=1)])
+    high = np.maximum.accumulate(level, axis=1)
+    return 1 - np.exp((level - high).min(axis=1))
 
 
 def percentiles(paths: np.ndarray, levels: tuple = LEVELS) -> pd.DataFrame:

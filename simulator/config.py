@@ -15,6 +15,8 @@ DEFAULT_LIVRET_CEILING = 22_950
 DEFAULT_INFLATION = 0.02
 
 DEFAULT_SCENARIOS = {"Pessimistic": 0.03, "Central": 0.06, "Optimistic": 0.08}
+# gross yearly return of the CTO that takes the deposits above the PEA ceiling
+DEFAULT_CTO_RETURN = 0.07
 DEFAULT_VOLATILITY = 0.15
 DEFAULT_N_PATHS = 5_000
 DEFAULT_SEED = 42
