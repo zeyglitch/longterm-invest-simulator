@@ -11,7 +11,10 @@ from simulator.portfolio import (
     first_oversold_sale,
     gross_deposits,
     pea_capacity,
+    period_start,
     portfolio_history,
+    price_change,
+    price_range,
     quantity_held,
     realised_gains,
     stale_prices,
@@ -410,3 +413,53 @@ def test_cash_balance_is_what_was_deposited_and_not_invested():
     # 1 000 - 100 - (500 + 1) + (120 - 1)
     assert cash_balance(trades, movements) == pytest.approx(518.0)
     assert cash_balance(trades, []) == pytest.approx(-382.0)  # purchases without their deposit
+
+
+# --- detailed view: periods, last change, yearly range ---
+
+
+def daily(values: list[float], start: str = "2026-01-05") -> pd.Series:
+    return pd.Series(values, index=pd.bdate_range(start, periods=len(values)))
+
+
+def test_period_starts():
+    end = date(2026, 3, 31)
+
+    assert period_start(end, "1W") == date(2026, 3, 24)
+    assert period_start(end, "1M") == date(2026, 2, 28)  # no 31 February: last day of the month
+    assert period_start(end, "6M") == date(2025, 9, 30)
+    assert period_start(end, "YTD") == date(2026, 1, 1)
+    assert period_start(end, "1Y") == date(2025, 3, 31)
+    assert period_start(end, "Max") is None
+    with pytest.raises(ValueError):
+        period_start(end, "2D")
+
+
+def test_price_change_compares_the_last_two_days():
+    change = price_change(daily([100.0, 102.0, 99.45]))
+
+    assert change["last"] == 99.45
+    assert change["previous"] == 102.0
+    assert change["change"] == pytest.approx(-2.55)
+    assert change["change_pct"] == pytest.approx(-0.025)
+    assert change["last_date"] == date(2026, 1, 7)
+    assert change["previous_date"] == date(2026, 1, 6)
+
+
+def test_price_change_needs_two_days():
+    assert price_change(daily([100.0])) is None
+    assert price_change(pd.Series(dtype=float)) is None
+    # two prices of the same day (a manual one and a downloaded one): no earlier day
+    same_day = pd.Series([100.0, 101.0], index=pd.to_datetime(["2026-01-05", "2026-01-05"]))
+    assert price_change(same_day) is None
+
+
+def test_price_range_keeps_the_last_year_only():
+    prices = pd.Series(
+        [50.0, 120.0, 80.0, 95.0],
+        index=pd.to_datetime(["2025-01-02", "2025-06-02", "2025-12-01", "2026-01-05"]),
+    )
+
+    assert price_range(prices, date(2026, 1, 5)) == (80.0, 120.0)
+    assert price_range(prices, date(2026, 1, 5), days=60) == (80.0, 95.0)
+    assert price_range(prices, date(2024, 1, 1)) is None

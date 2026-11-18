@@ -5,29 +5,40 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # one palette for the whole app: the same asset or curve keeps its colour on every page
-PALETTE = ["#5b8def", "#f2a93b", "#3dbe8b", "#b07cf0", "#ef6f6c", "#4fc3d9", "#c7b94a", "#8a94a6"]
+# night blue theme of .streamlit/config.toml: royal blue, violet, then contrasting colours
+PALETTE = ["#6C8BFF", "#A78BFA", "#34D399", "#38BDF8", "#F472B6", "#FBBF24", "#818CF8", "#8B93B8"]
 VALUE_COLOR = PALETTE[0]
-INVESTED_COLOR = "#8a94a6"
+INVESTED_COLOR = "#8B93B8"
 DEPOSIT_COLOR = PALETTE[2]
-WITHDRAWAL_COLOR = PALETTE[4]
+WITHDRAWAL_COLOR = "#F87171"
 # one colour per scenario, in the order pessimistic, central, optimistic
-SCENARIO_COLORS = [PALETTE[1], PALETTE[0], PALETTE[2]]
-LIVRET_COLOR = PALETTE[3]
+SCENARIO_COLORS = [PALETTE[5], PALETTE[0], PALETTE[2]]
+LIVRET_COLOR = PALETTE[1]
 
 TRANSPARENT = "rgba(0,0,0,0)"
+GRID_COLOR = "#1C2448"
+TEXT_COLOR = "#AEB7DD"
+FONT = "Inter, sans-serif"
 
 
 def _base_figure(**layout) -> go.Figure:
-    """A figure with the dark look shared by all charts. Separators give 12 345.67."""
+    """A figure with the dark look shared by all charts. Separators give 12 345.67.
+
+    `layout` adds to these settings, or replaces one of them (a smaller margin, for example).
+    """
+    settings = {
+        "template": "plotly_dark",
+        "paper_bgcolor": TRANSPARENT,
+        "plot_bgcolor": TRANSPARENT,
+        "separators": ". ",
+        "margin": {"l": 10, "r": 10, "t": 30, "b": 10},
+        "font": {"family": FONT, "color": TEXT_COLOR},
+    }
     figure = go.Figure()
-    figure.update_layout(
-        template="plotly_dark",
-        paper_bgcolor=TRANSPARENT,
-        plot_bgcolor=TRANSPARENT,
-        separators=". ",
-        margin={"l": 10, "r": 10, "t": 30, "b": 10},
-        **layout,
-    )
+    figure.update_layout(**(settings | layout))
+    # thin grid lines, as on a trading screen
+    figure.update_xaxes(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR)
+    figure.update_yaxes(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR)
     return figure
 
 
@@ -67,6 +78,7 @@ def allocation_chart(table: pd.DataFrame) -> go.Figure:
         plot_bgcolor=TRANSPARENT,
         separators=". ",
         margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        font={"family": FONT, "color": TEXT_COLOR},
         legend={"orientation": "h", "y": -0.05},
     )
     return figure
@@ -265,15 +277,15 @@ def fan_chart(bands: pd.DataFrame, samples: pd.DataFrame) -> go.Figure:
             go.Scatter(
                 x=bands["date"],
                 y=samples[column],
-                line={"color": "rgba(138, 148, 166, 0.25)", "width": 1},
+                line={"color": "rgba(139, 147, 184, 0.22)", "width": 1},
                 hoverinfo="skip",
                 showlegend=False,
             )
         )
     # each band is two lines, the second one filled down to the first
     for low, high, colour, name in [
-        (10, 90, "rgba(91, 141, 239, 0.18)", "10-90 %"),
-        (25, 75, "rgba(91, 141, 239, 0.35)", "25-75 %"),
+        (10, 90, "rgba(108, 139, 255, 0.16)", "10-90 %"),
+        (25, 75, "rgba(167, 139, 250, 0.32)", "25-75 %"),
     ]:
         figure.add_trace(
             go.Scatter(
@@ -360,6 +372,76 @@ def drawdown_chart(falls: pd.Series) -> go.Figure:
             line={"color": WITHDRAWAL_COLOR, "width": 1},
             fillcolor="rgba(239, 111, 108, 0.3)",
             hovertemplate="%{x|%d/%m/%Y}: %{y:.1%}<extra></extra>",
+        )
+    )
+    return figure
+
+
+GAIN_COLOR = "#34D399"
+LOSS_COLOR = "#F87171"
+
+
+def _trend_colour(values: pd.Series) -> str:
+    """Green if the last value is at or above the first one, red otherwise."""
+    return GAIN_COLOR if values.iloc[-1] >= values.iloc[0] else LOSS_COLOR
+
+
+def price_chart(prices: pd.Series, buys: pd.DataFrame) -> go.Figure:
+    """Price of one fund over time, green if it rose over the period shown, red if it fell.
+
+    `buys` has the columns `date` and `price`: a marker shows each purchase.
+    """
+    figure = _base_figure(
+        hovermode="x unified",
+        showlegend=False,
+        yaxis={"ticksuffix": " €", "side": "right"},
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        height=300,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=prices.index,
+            y=prices.values,
+            name="Price",
+            line={"color": _trend_colour(prices), "width": 2},
+            hovertemplate="%{y:,.2f} €",
+        )
+    )
+    if not buys.empty:
+        figure.add_trace(
+            go.Scatter(
+                x=buys["date"],
+                y=buys["price"],
+                name="Your buys",
+                mode="markers",
+                marker={"color": PALETTE[1], "size": 9, "symbol": "triangle-up"},
+                hovertemplate="Bought at %{y:,.2f} €",
+            )
+        )
+    return figure
+
+
+def gain_chart(history: pd.DataFrame) -> go.Figure:
+    """Gain of the portfolio over time (value minus what the shares cost), as `date`, `gain`."""
+    colour = _trend_colour(history["gain"])
+    figure = _base_figure(
+        hovermode="x unified",
+        showlegend=False,
+        yaxis={"ticksuffix": " €", "tickformat": ",.0f", "side": "right"},
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        height=380,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=history["date"],
+            y=history["gain"],
+            name="Gain",
+            line={"color": colour, "width": 2},
+            fill="tozeroy",
+            fillcolor="rgba(52, 211, 153, 0.12)"
+            if colour == GAIN_COLOR
+            else "rgba(248, 113, 113, 0.12)",
+            hovertemplate="%{y:,.2f} €",
         )
     )
     return figure

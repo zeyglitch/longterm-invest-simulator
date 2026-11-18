@@ -27,8 +27,11 @@ from simulator.portfolio import (
 from simulator.prices import latest_price_date
 from simulator.taxes import PEA, net_value, pea_five_year_date, tax_rate
 from views.common import format_eur, format_pct, format_quantity, get_conn
+from views.positions import render_positions
 
 PERIOD_DAYS = {"3 months": 91, "1 year": 365}
+OVERVIEW = "Overview"
+DETAIL = "Positions and orders"
 
 
 def format_gap(weight: float | None, target: float | None) -> str:
@@ -61,22 +64,29 @@ def render_indicators(positions: list[Position], deposits: float, include_fees: 
 
     columns = st.columns(4)
     fees_note = "order fees included" if include_fees else "order fees left out"
+    # cards of the same height, even though only one of them has a delta
     columns[0].metric(
         "Invested",
         format_eur(invested),
         help=f"Cost of the positions you hold, {fees_note} (see Settings › Account).",
+        border=True,
+        height="stretch",
     )
-    columns[1].metric("Current value", format_eur(value))
+    columns[1].metric("Current value", format_eur(value), border=True, height="stretch")
     columns[2].metric(
         "Unrealised gain",
         format_eur(gain),
         delta=format_pct(gain_pct) if gain_pct is not None else None,
         help="Current value minus cost, on the positions that are still open.",
+        border=True,
+        height="stretch",
     )
     columns[3].metric(
         "Total deposits",
         format_eur(deposits),
         help="Money put on the account: deposits minus withdrawals.",
+        border=True,
+        height="stretch",
     )
 
     unpriced = [p.asset.name for p in positions if p.value is None]
@@ -288,8 +298,20 @@ positions = compute_positions(assets, transactions, last_prices, include_fees)
 cash_movements = list_cash_movements(conn)
 today = date.today()
 
-render_indicators(positions, total_deposits(cash_movements), include_fees)
+view = st.segmented_control(
+    "View",
+    [OVERVIEW, DETAIL],
+    default=OVERVIEW,
+    required=True,
+    key="portfolio_view",
+    label_visibility="collapsed",
+)
 render_freshness(positions, today)
+if view == DETAIL:
+    render_positions(assets, transactions, positions, include_fees, today)
+    st.stop()
+
+render_indicators(positions, total_deposits(cash_movements), include_fees)
 if positions:
     st.dataframe(positions_table(positions), hide_index=True)
 else:

@@ -286,3 +286,58 @@ def target_weights_total(assets: list[Asset]) -> float | None:
     """Sum of the target weights that are set, or None if no asset has one."""
     weights = [asset.target_weight for asset in assets if asset.target_weight is not None]
     return sum(weights) if weights else None
+
+
+PERIODS = ("1W", "1M", "6M", "YTD", "1Y", "Max")
+
+
+def period_start(end: date, period: str) -> date | None:
+    """First day shown for a period ending on `end`: one week, one month, six months, the start
+    of the year, one year, or None for everything."""
+    if period == "Max":
+        return None
+    if period == "YTD":
+        return date(end.year, 1, 1)
+    offsets = {
+        "1W": pd.DateOffset(weeks=1),
+        "1M": pd.DateOffset(months=1),
+        "6M": pd.DateOffset(months=6),
+        "1Y": pd.DateOffset(years=1),
+    }
+    if period not in offsets:
+        raise ValueError(f"Unknown period: {period}")
+    return (pd.Timestamp(end) - offsets[period]).date()
+
+
+def price_change(prices: pd.Series) -> dict | None:
+    """The last price against the one before it: `last`, `last_date`, `previous`,
+    `previous_date`, `change` (euros per share) and `change_pct` (decimal).
+
+    The previous price is the last one of an earlier day: with daily prices it is yesterday's
+    close, with weekly prices last week's. None when fewer than two days are known.
+    """
+    prices = prices.dropna().sort_index()
+    if len(prices) < 2:
+        return None
+    last_date = prices.index[-1]
+    earlier = prices[prices.index < last_date]
+    if earlier.empty:
+        return None
+    last, previous = float(prices.iloc[-1]), float(earlier.iloc[-1])
+    return {
+        "last": last,
+        "last_date": last_date.date(),
+        "previous": previous,
+        "previous_date": earlier.index[-1].date(),
+        "change": last - previous,
+        "change_pct": last / previous - 1,
+    }
+
+
+def price_range(prices: pd.Series, end: date, days: int = 365) -> tuple[float, float] | None:
+    """Lowest and highest price of the `days` before `end` (`end` included), or None."""
+    start = pd.Timestamp(end) - pd.Timedelta(days=days)
+    window = prices[(prices.index > start) & (prices.index <= pd.Timestamp(end))].dropna()
+    if window.empty:
+        return None
+    return float(window.min()), float(window.max())

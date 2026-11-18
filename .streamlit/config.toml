@@ -1,5 +1,51 @@
+# Dark "trading desk" look: night blue surfaces, royal blue accent, violet highlights.
+# Colours of the plotly charts are in simulator/charts.py and follow the same palette.
+
 [theme]
 base = "dark"
-backgroundColor = "#0e0f12"
-secondaryBackgroundColor = "#1a1c21"
-primaryColor = "#5b8def"
+primaryColor = "#4F6BED"              # royal blue: buttons, active tabs, sliders
+backgroundColor = "#0A0F24"           # night blue
+secondaryBackgroundColor = "#141B38"  # cards, inputs, table headers
+textColor = "#E4E8F7"
+linkColor = "#8DA2FB"
+borderColor = "#252E57"
+codeBackgroundColor = "#141B38"
+codeTextColor = "#C4CDF2"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "10px"
+buttonRadius = "8px"
+
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+baseFontSize = 14
+headingFontSizes = ["28px", "21px", "17px", "15px", "14px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+metricValueFontSize = "1.6rem"
+metricValueFontWeight = 600
+linkUnderline = false
+
+# gains in green, losses in red, as on every trading screen
+greenColor = "#34D399"
+redColor = "#F87171"
+blueColor = "#6C8BFF"
+violetColor = "#A78BFA"
+yellowColor = "#FBBF24"
+orangeColor = "#FB923C"
+grayColor = "#8B93B8"
+
+chartCategoricalColors = ["#6C8BFF", "#A78BFA", "#34D399", "#38BDF8", "#F472B6", "#FBBF24", "#818CF8", "#8B93B8"]
+
+dataframeBorderColor = "#252E57"
+dataframeHeaderBackgroundColor = "#141B38"
+dataframeHeaderTextColor = "#AEB7DD"
+
+[theme.sidebar]
+backgroundColor = "#070B1C"
+secondaryBackgroundColor = "#111833"
+codeBackgroundColor = "#111833"
+codeTextColor = "#C4CDF2"
+textColor = "#D7DCF2"
+borderColor = "#1E2650"
+primaryColor = "#4F6BED"
+linkColor = "#8DA2FB"
