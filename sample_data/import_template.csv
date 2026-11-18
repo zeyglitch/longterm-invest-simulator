@@ -1,0 +1,5 @@
+date,isin,kind,quantity,unit_price,fees,note
+2026-01-05,DEMO00000001,BUY,2,110.50,1,monthly buy
+2026-01-05,DEMO00000002,BUY,4.5,52.10,1,
+05/02/2026,DEMO00000001,BUY,1.25,111.20,0,date written day first
+2026-02-20,DEMO00000002,SELL,1,53.40,1,partial sale

@@ -155,6 +155,33 @@ def add_transaction(conn: sqlite3.Connection, tx: Transaction) -> int:
     return cursor.lastrowid
 
 
+def add_transactions(conn: sqlite3.Connection, transactions: list[Transaction]) -> None:
+    """Insert several transactions at once: all of them, or none if one is refused."""
+    try:
+        conn.executemany(
+            "INSERT INTO transactions "
+            "(date, asset_id, kind, quantity, unit_price, fees, note, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    tx.date.isoformat(),
+                    tx.asset_id,
+                    tx.kind,
+                    tx.quantity,
+                    tx.unit_price,
+                    tx.fees,
+                    tx.note,
+                    tx.source,
+                )
+                for tx in transactions
+            ],
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+
+
 def update_transaction(conn: sqlite3.Connection, tx: Transaction) -> None:
     conn.execute(
         "UPDATE transactions SET date = ?, asset_id = ?, kind = ?, quantity = ?, "

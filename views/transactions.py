@@ -6,6 +6,7 @@ import streamlit as st
 from simulator.database import (
     add_cash_movement,
     add_transaction,
+    add_transactions,
     delete_cash_movement,
     delete_transaction,
     list_assets,
@@ -13,7 +14,8 @@ from simulator.database import (
     list_transactions,
     update_transaction,
 )
-from simulator.importer import export_transactions
+from simulator.demo import SAMPLE_DIR
+from simulator.importer import export_transactions, find_duplicates, read_generic_csv
 from simulator.models import Asset, CashMovement, Transaction
 from simulator.portfolio import first_oversold_sale, trade_errors
 from views.common import (
@@ -333,6 +335,102 @@ def render_cash_history() -> None:
             delete_cash_dialog(selected)
 
 
+def import_preview(
+    trades: list[Transaction], duplicates: list[Transaction], assets
+) -> pd.DataFrame:
+    names = {asset.id: asset.name for asset in assets}
+    duplicate_ids = {id(tx) for tx in duplicates}
+    return pd.DataFrame(
+        {
+            "Date": [f"{tx.date:%d/%m/%Y}" for tx in trades],
+            "Asset": [names[tx.asset_id] for tx in trades],
+            "Type": [KIND_LABELS[tx.kind] for tx in trades],
+            "Quantity": [format_quantity(tx.quantity) for tx in trades],
+            "Unit price": [format_eur(tx.unit_price) for tx in trades],
+            "Fees": [format_eur(tx.fees) for tx in trades],
+            "Note": [tx.note for tx in trades],
+            "Status": [
+                "Probably already saved" if id(tx) in duplicate_ids else "New" for tx in trades
+            ],
+        }
+    )
+
+
+def render_import(assets: list[Asset]) -> None:
+    """Read a CSV file, show what was understood, and write it only when the user confirms."""
+    st.caption(
+        "Columns: date, isin, kind (BUY or SELL), quantity, unit_price, and optionally fees and "
+        "note. Dates as 2026-01-31 or 31/01/2026; comma or semicolon between columns. Numbers as "
+        "1 234,56 or 1234.56: a space between thousands, a comma or a dot before the decimals. "
+        "The assets must exist in Settings. The file exported below has the same columns."
+    )
+    st.download_button(
+        "Download an example file",
+        data=(SAMPLE_DIR / "import_template.csv").read_bytes(),
+        file_name="import_template.csv",
+        mime="text/csv",
+        icon=":material/download:",
+    )
+    # a new key after each import gives an empty upload field
+    key = f"import_file_{st.session_state.get('import_count', 0)}"
+    uploaded = st.file_uploader("CSV file", type=["csv", "txt"], key=key)
+    if uploaded is None:
+        return
+
+    conn = get_conn()
+    trades, errors = read_generic_csv(uploaded.getvalue(), assets)
+    if errors:
+        st.warning(
+            f"{len(errors)} line(s) cannot be read and will be left out:\n\n"
+            + "\n\n".join(errors[:20])
+            + ("\n\n..." if len(errors) > 20 else "")
+        )
+    if not trades:
+        st.info("No trade could be read from this file.")
+        return
+
+    existing = list_transactions(conn)
+    duplicates = find_duplicates(trades, existing)
+    st.dataframe(import_preview(trades, duplicates, assets), hide_index=True)
+    skip = st.checkbox(
+        f"Leave out the {len(duplicates)} trade(s) probably already saved",
+        value=True,
+        disabled=not duplicates,
+        help="Same date, asset, type, quantity, price and fees as a saved trade.",
+    )
+    with_deposits = st.checkbox(
+        "Also record a deposit for each buy",
+        value=False,
+        help="Tick it if the deposits that paid for these buys are not in the app yet. Leave it "
+        "off if you already entered them, or the deposits would count twice.",
+    )
+    duplicate_ids = {id(tx) for tx in duplicates} if skip else set()
+    to_import = [tx for tx in trades if id(tx) not in duplicate_ids]
+
+    oversold = first_oversold_sale(existing + to_import)
+    if oversold is not None:
+        names = {asset.id: asset.name for asset in assets}
+        st.error(
+            f"The sale of {format_quantity(oversold.quantity)} {names[oversold.asset_id]} on "
+            f"{oversold.date:%d/%m/%Y} would sell more shares than held on that date, with the "
+            "trades already saved. Nothing can be imported until the file is fixed."
+        )
+    label = f"Import {len(to_import)} trade(s)"
+    if st.button(label, type="primary", disabled=not to_import or oversold is not None):
+        add_transactions(conn, to_import)
+        if with_deposits:
+            for tx in to_import:
+                if tx.kind == "BUY":
+                    total = trade_total(tx.kind, tx.quantity, tx.unit_price, tx.fees)
+                    add_cash_movement(conn, CashMovement(None, tx.date, "DEPOSIT", total, "Import"))
+        st.session_state["import_count"] = st.session_state.get("import_count", 0) + 1
+        set_flash(
+            f"{len(to_import)} trade(s) imported"
+            + (", with their deposits." if with_deposits else ".")
+        )
+        st.rerun()
+
+
 st.title("Transactions")
 show_flash()
 
@@ -349,6 +447,9 @@ with st.container(border=True):
 with st.expander("Add a cash movement"):
     st.caption("Money moved between your bank and the account, without buying anything.")
     render_add_cash_movement()
+
+with st.expander("Import trades from a CSV file"):
+    render_import(assets)
 
 st.subheader("History")
 trades_tab, cash_tab = st.tabs(["Trades", "Cash movements"])

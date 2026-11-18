@@ -23,11 +23,25 @@ from simulator.database import (
     set_setting,
     update_asset,
 )
-from simulator.importer import export_transactions
+from simulator.demo import build_demo_db
+from simulator.importer import (
+    backup_summary,
+    export_backup,
+    read_backup,
+    restore_backup,
+)
 from simulator.models import Asset, TaxSettings
 from simulator.portfolio import asset_errors, target_weights_total
 from simulator.prices import fetch_last_price, find_ticker
-from views.common import asset_label, format_eur, format_pct, get_conn, set_flash, show_flash
+from views.common import (
+    asset_label,
+    clear_mode_state,
+    format_eur,
+    format_pct,
+    get_conn,
+    set_flash,
+    show_flash,
+)
 
 
 def asset_from_inputs(asset_id, name, isin, ticker, fees_pct, weight_pct) -> Asset:
@@ -414,13 +428,7 @@ def reset_dialog() -> None:
         "It cannot be undone.",
         icon=":material/warning:",
     )
-    st.download_button(
-        "Download a backup of my trades first (CSV)",
-        data=export_transactions(get_conn()),
-        file_name="transactions.csv",
-        mime="text/csv",
-        icon=":material/download:",
-    )
+    render_backup_download()
     # one field per opening of the dialog: an `ok` typed in an earlier attempt never counts
     answer = st.text_input(
         f"Type {RESET_WORD} to confirm", key=f"reset_confirm_{st.session_state['reset_attempt']}"
@@ -443,8 +451,8 @@ def reset_dialog() -> None:
     if st.button("Delete everything", type="primary", icon=":material/delete:", disabled=not ready):
         reset_database(get_conn())
         # the names of the assets the last refresh could not update are gone too
-        for key in ("reset_typed_at", "price_failures_real"):
-            st.session_state.pop(key, None)
+        st.session_state.pop("reset_typed_at", None)
+        clear_mode_state("real")
         set_flash("All your data has been deleted.")
         st.rerun()  # the whole page, which also closes the dialog
 
@@ -454,13 +462,65 @@ def reset_dialog() -> None:
         st.rerun(scope="fragment")
 
 
+def render_backup_download() -> None:
+    st.download_button(
+        "Download a full backup",
+        data=export_backup(get_conn()),
+        file_name=f"ltis-backup-{date.today():%Y-%m-%d}.json",
+        mime="application/json",
+        icon=":material/download:",
+        help="Assets, trades, cash movements, prices, settings and plans, in one file.",
+    )
+
+
+def render_restore() -> None:
+    """Replace all the data by a backup, after reading it and asking for confirmation."""
+    key = f"restore_file_{st.session_state.get('restore_count', 0)}"
+    uploaded = st.file_uploader("Restore a backup", type=["json"], key=key)
+    if uploaded is None:
+        return
+    tables, errors = read_backup(uploaded.getvalue())
+    if errors:
+        st.error("\n\n".join(errors))
+        return
+    st.info(
+        f"This backup holds {len(tables['assets'])} assets, {len(tables['transactions'])} "
+        f"trades, {len(tables['cash_movements'])} cash movements and {len(tables['plans'])} "
+        f"plans. Today the app holds {backup_summary(get_conn())}: all of it will be replaced."
+    )
+    sure = st.checkbox("I understand that my current data will be replaced", key=f"{key}_sure")
+    if st.button("Restore this backup", type="primary", disabled=not sure):
+        errors = restore_backup(get_conn(), tables)
+        if errors:
+            st.error("\n\n".join(errors))
+            return
+        st.session_state["restore_count"] = st.session_state.get("restore_count", 0) + 1
+        clear_mode_state("real")
+        set_flash("Backup restored.")
+        st.rerun()
+
+
 def render_data() -> None:
     if st.session_state["demo"]:
         st.caption(
-            "The demo data is rebuilt each time the app starts. "
-            "Switch off Demo data in the sidebar to manage your own data."
+            "The demo data lives in memory only. Put it back as it was at the start, for example "
+            "after trying the import or deleting trades."
         )
+        if st.button("Reset demo data", icon=":material/restart_alt:"):
+            st.session_state["demo_conn"] = build_demo_db()
+            st.session_state["conn"] = st.session_state["demo_conn"]
+            clear_mode_state("demo")
+            set_flash("Demo data reset.")
+            st.rerun()
+        st.caption("Switch off Demo data in the sidebar to back up or restore your own data.")
         return
+
+    st.caption(
+        f"The app holds {backup_summary(get_conn())}. Keep a backup somewhere else than this "
+        "computer: the database is a single file in the `data/` folder."
+    )
+    render_backup_download()
+    render_restore()
     st.caption(
         "Start again from an empty portfolio, for example after trying the app with test numbers."
     )

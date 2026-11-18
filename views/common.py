@@ -95,3 +95,14 @@ def cached_history(ticker: str) -> pd.Series:
             return history  # not kept: the next click tries again
         st.session_state[key] = history
     return st.session_state[key]
+
+
+def clear_mode_state(mode: str) -> None:
+    """Forget what the pages keep for one database (`demo` or `real`): its plan on screen, its
+    last simulation results... Needed when that database is replaced or emptied.
+
+    `plan_version_{mode}` is kept: the plan tables get a new key, so they cannot show old edits.
+    """
+    for key in list(st.session_state):
+        if key.endswith(f"_{mode}") and key != f"plan_version_{mode}":
+            del st.session_state[key]
