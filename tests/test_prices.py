@@ -20,6 +20,31 @@ def fake_download(table):
     return lambda ticker, start: table
 
 
+@pytest.fixture(autouse=True)
+def no_quote(monkeypatch):
+    """No network in the tests: the quote of the latest session is missing unless a test
+    gives one."""
+    monkeypatch.setattr(prices, "_last_session_price", lambda ticker: None)
+
+
+def test_a_session_without_close_takes_the_price_of_the_quote(monkeypatch):
+    monkeypatch.setattr(prices, "_download", fake_download(yahoo_table([10.0, 11.0, None])))
+    monkeypatch.setattr(prices, "_last_session_price", lambda ticker: 10.5)
+
+    history = prices.fetch_history("TEST.PA")
+
+    assert history.tolist() == [10.0, 11.0, 10.5]
+    assert history.index[-1] == pd.Timestamp("2026-11-11")
+    assert prices.fetch_last_price("TEST.PA") == (date(2026, 11, 11), 10.5)
+
+
+def test_an_older_missing_day_is_not_filled_with_the_quote(monkeypatch):
+    monkeypatch.setattr(prices, "_download", fake_download(yahoo_table([10.0, None, 11.0])))
+    monkeypatch.setattr(prices, "_last_session_price", lambda ticker: 99.0)
+
+    assert prices.fetch_history("TEST.PA").tolist() == [10.0, 11.0]
+
+
 def test_history_reads_the_close_column_and_drops_missing_days(monkeypatch):
     monkeypatch.setattr(prices, "_download", fake_download(yahoo_table([10.0, 11.0, None])))
 

@@ -23,6 +23,19 @@ def _download(ticker: str, start: date | None) -> pd.DataFrame:
     return yf.download(ticker, start=start, auto_adjust=True, progress=False)
 
 
+def _last_session_price(ticker: str) -> float | None:
+    """Latest price Yahoo shows for a ticker, or None. Never raises.
+
+    Yahoo often leaves the close of the latest session empty in the daily history, for hours
+    after the market closed, while its quote already shows the price.
+    """
+    try:
+        price = yf.Ticker(ticker).fast_info["lastPrice"]
+    except (YFException, OSError, ValueError, KeyError, TypeError):
+        return None
+    return float(price) if price and price > 0 else None
+
+
 def _search(isin: str) -> list[dict]:
     """Raw Yahoo search results for a text such as an ISIN."""
     return yf.Search(isin).quotes
@@ -67,7 +80,11 @@ def fetch_history(ticker: str, start: date | None = None) -> pd.Series:
     closes = table["Close"]
     if isinstance(closes, pd.DataFrame):  # yfinance puts the ticker as a second column level
         closes = closes.iloc[:, 0]
-    # the row of the current session can be NaN until Yahoo publishes it
+    # the row of the latest session can have no close yet: take the price of the quote
+    # instead; the next refresh goes back a few days and replaces it with the real close
+    if pd.isna(closes.iloc[-1]):
+        closes = closes.copy()
+        closes.iloc[-1] = _last_session_price(ticker)
     closes = closes.dropna()
     closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
     return closes.astype(float).rename(ticker)
