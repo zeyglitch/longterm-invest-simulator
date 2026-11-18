@@ -297,9 +297,15 @@ for name, table in projections.items():
             "Target reached": target_text,
         }
     )
-    # one line per account, then their total; a portfolio wholly in a CTO has one line only
+    # one line per account used, then their total when there are two; the CTO of a PEA is used
+    # only once the ceiling is reached
     returns = {PEA: scenarios[name], CTO: cto_gross[name] if envelope == PEA else scenarios[name]}
-    for account in (PEA, CTO) if envelope == PEA else (CTO,):
+    if envelope == PEA:
+        uses_cto = table["contributions_cto"].max() > 0
+        accounts = (PEA, CTO) if uses_cto else (PEA,)
+    else:
+        accounts = (CTO,)
+    for account in accounts:
         pocket = account.lower()
         value, paid = last[f"value_{pocket}"], last[f"contributions_{pocket}"]
         pocket_rows.append(
@@ -315,7 +321,7 @@ for name, table in projections.items():
                 "After tax": format_eur(last[f"net_{pocket}"]),
             }
         )
-    if envelope == PEA:
+    if len(accounts) == 2:
         pocket_rows.append(
             {
                 "Scenario": name,
@@ -347,6 +353,11 @@ if envelope == PEA:
         "rest goes to the CTO. Deposits: what was put in and not withdrawn. Tax = gains x tax "
         "rate, for each account on its own: a loss in one does not lower the tax of the other. "
         "Withdrawals of the plan are taken from the CTO first, then from the PEA."
+        + (
+            ""
+            if any(line["Account"] == CTO for line in pocket_rows)
+            else " Here the ceiling is never reached: everything stays in the PEA."
+        )
     )
 else:
     st.caption("The whole portfolio is in a CTO: the flat tax applies to all its gains.")

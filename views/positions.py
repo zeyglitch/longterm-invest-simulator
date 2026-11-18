@@ -281,6 +281,12 @@ def render_positions(
     prices = {asset.id: get_price_history(get_conn(), asset.id) for asset in assets}
     changes = {p.asset.id: price_change(prices[p.asset.id]) for p in positions}
 
+    unpriced = [p.asset.name for p in positions if p.value is None]
+    if unpriced:
+        st.warning(
+            "No price for " + ", ".join(unpriced) + ": left out of the value and the gain. "
+            "Refresh prices, or enter one by hand in Settings."
+        )
     render_kpis(positions, changes)
 
     with st.container(border=True):

@@ -130,7 +130,8 @@ def contributions_chart(flows: pd.Series, one_offs: pd.DataFrame) -> go.Figure:
             x=flows.index,
             y=flows.values,
             name="Monthly deposit",
-            marker={"color": VALUE_COLOR, "line": {"width": 0}},
+            # an outline of the same colour closes the thin gaps between the bars
+            marker={"color": VALUE_COLOR, "line": {"width": 1, "color": VALUE_COLOR}},
             hovertemplate="%{x|%b %Y}: %{y:,.2f} €<extra></extra>",
         )
     )

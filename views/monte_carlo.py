@@ -432,13 +432,22 @@ right.metric(
 st.plotly_chart(charts.histogram_chart(pd.Series(shown_final), target), width="stretch")
 st.caption("The highest 1 % of the paths are left out of the chart, to keep the rest readable.")
 
-split = (pockets["value_pea"] > 0).any()
+# the accounts that held money in at least one path; the CTO of a PEA only above the ceiling
+used = {
+    account: bool(
+        (pockets[f"value_{account.lower()}"] > 0).any()
+        or (pockets[f"contributions_{account.lower()}"] > 0).any()
+    )
+    for account in (PEA, CTO)
+}
+accounts = [account for account in (PEA, CTO) if used[account]] or [envelope]
+split = len(accounts) == 2
 st.subheader("PEA and CTO apart" if split else "Before and after tax")
 euros = "today's euros" if adjust else "future euros"
 st.caption(f"Average of all the paths at the end, in {euros}.")
 average = ends.mean()
 rows = []
-for account in (PEA, CTO) if split else (CTO,):
+for account in accounts:
     pocket = account.lower()
     value, paid, net = (
         average[f"value_{pocket}"],

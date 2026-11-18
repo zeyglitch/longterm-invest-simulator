@@ -33,6 +33,9 @@ SAMPLE_PATHS = 20
 def render_start(today: date) -> tuple[float, float, date]:
     """Capital, deposits left in it, and the day the withdrawals start."""
     projected = st.session_state.get(f"projection_result_{data_mode()}")
+    # a projection that ends with nothing is no capital to live on
+    if projected:
+        projected = {name: end for name, end in projected.items() if end["value"] > 0}
     sources = [FROM_PROJECTION, CUSTOM] if projected else [CUSTOM]
     source = st.segmented_control(
         "Starting capital", sources, default=sources[0], required=True, key="wd_source"
