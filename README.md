@@ -118,9 +118,10 @@ Yahoo Finance and never touch your own database.
 
 ## About this project
 
-Built as a personal and portfolio project. I used AI assistants (Claude) for planning, code
-generation and review, working from a detailed specification I wrote, and I reviewed and tested
-every part.
+This is a personal project, built for my own investment tracking. It was built with the help of an AI assistant (Claude Code, by Anthropic): 
+I defined what the app should do, built the specification and plan with the assistant through a question-and-answer process, and validated each phase; 
+the assistant wrote most of the code. I reviewed and tested every phase in the app before approving its commit, and checked the results against 
+hand calculations and my broker's figures.
 
 ## Disclaimer
 
